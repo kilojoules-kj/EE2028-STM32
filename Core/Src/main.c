@@ -223,17 +223,19 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStructButton.Pin = BUTTON_EXTI13_Pin;
 	GPIO_InitStructButton.Mode = GPIO_MODE_IT_FALLING;
 	GPIO_InitStructButton.Pull = GPIO_NOPULL;
-	HAL_GPIO_Init(GPIOC, &GPIO_InitStructButton);
+	HAL_GPIO_Init(BUTTON_EXTI13_GPIO_Port, &GPIO_InitStructButton);
 
-	// Enable NVIC EXTI line 13
-	HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+
 
 	// set INT1 EXTI 11 as interrupt for LSM6DSL
 	GPIO_InitTypeDef GPIO_InitStructLSM6DSL = {0};
-	GPIO_InitStructLSM6DSL.Pin = LSM6DSL_INT1_EXTI11_GPIO_Port;
-	GPIO_InitStructLSM6DSL.Mode = GPIO_MODE_IT_FALLING;
+	GPIO_InitStructLSM6DSL.Pin = LSM6DSL_INT1_EXTI11_Pin;
+	GPIO_InitStructLSM6DSL.Mode = GPIO_MODE_IT_RISING;
 	GPIO_InitStructLSM6DSL.Pull = GPIO_NOPULL;
 	HAL_GPIO_Init(LSM6DSL_INT1_EXTI11_GPIO_Port, &GPIO_InitStructLSM6DSL);
+
+	// Enable NVIC EXTI line 13
+	HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
