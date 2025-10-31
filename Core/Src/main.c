@@ -553,5 +553,6 @@ int main(void) {
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET); // constant HIGH
 	while (programRunning) {
 		currentState->update();
+		HAL_Delay(1000);
 	}
 }
