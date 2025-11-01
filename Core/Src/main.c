@@ -26,16 +26,15 @@
 // GPIO
 static void MX_GPIO_Init(void);
 
-// Log
+// Global Variables
 // extern void initialise_monitor_handles(void);	// Log for semi-hosting support (printf)
 static void UART1_Init(void); // UART Serial RxTx
-
-
-// Serial RxTx
-UART_HandleTypeDef huart1;
+static UART_HandleTypeDef huart1; // Serial RxTx
+static ADC_HandleTypeDef ADC_HandlerLightSensor;
+static I2C_HandleTypeDef hi2c;
 int BUTTON_DURATION = 600; // 600 tick/ms for GetTick()
 static bool buttonActive = false;
-static bool isPlayer = true;
+static bool isPlayer = false;
 static int buttonPressTime;
 static bool nearbyFlag = false;
 static int nearbyStartTime;
@@ -43,11 +42,11 @@ static int nearbyStartTime;
 static void UART1_Init(void) {
 	/* Pin configuration for UART. BSP_COM_Init() can do
 	this automatically */
-	__HAL_RCC_GPIOB_CLK_ENABLE();
 	__HAL_RCC_USART1_CLK_ENABLE();
+
 	GPIO_InitTypeDef GPIO_InitStruct = {0};
+	GPIO_InitStruct.Pin = ST_LINK_UART1_RX_Pin | ST_LINK_UART1_TX_Pin;
 	GPIO_InitStruct.Alternate = GPIO_AF7_USART1;
-	GPIO_InitStruct.Pin = GPIO_PIN_7|GPIO_PIN_6;
 	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
@@ -69,6 +68,162 @@ static void UART1_Init(void) {
 	}
 }
 
+// GPIO
+static void MX_GPIO_Init(void) {
+	/* GPIO Ports Clock Enable */
+	__HAL_RCC_GPIOA_CLK_ENABLE(); // LED 1
+	__HAL_RCC_GPIOB_CLK_ENABLE(); // For LED 2
+	__HAL_RCC_GPIOC_CLK_ENABLE(); // Enable AHB2 Bus for GPIOC for Button
+	__HAL_RCC_GPIOD_CLK_ENABLE(); // For LSM6DSL
+
+	// LED 1
+	GPIO_InitTypeDef GPIO_InitStructLED1 = {0};
+	/*Configure GPIO pin ARD_D13_Pin / LED1 */
+	GPIO_InitStructLED1.Pin = ARD_D13_Pin;
+	GPIO_InitStructLED1.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStructLED1.Pull = GPIO_NOPULL;
+	GPIO_InitStructLED1.Speed = GPIO_SPEED_FREQ_LOW;
+	HAL_GPIO_Init(ARD_D13_GPIO_Port, &GPIO_InitStructLED1);
+	HAL_GPIO_WritePin(ARD_D13_GPIO_Port, ARD_D13_Pin, GPIO_PIN_RESET);  // configure LED1 to LOW
+
+	// LED 2
+	GPIO_InitTypeDef GPIO_InitStructLED2 = {0};
+	/*Configure GPIO pin LED2_Pin */
+	GPIO_InitStructLED2.Pin = LED2_Pin;
+	GPIO_InitStructLED2.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStructLED2.Pull = GPIO_NOPULL;
+	GPIO_InitStructLED2.Speed = GPIO_SPEED_FREQ_LOW;
+	HAL_GPIO_Init(LED2_GPIO_Port, &GPIO_InitStructLED2);
+	HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_RESET);  // configure LED2 to LOW
+
+	// BUTTON
+	GPIO_InitTypeDef GPIO_InitStructButton = {0};
+	// Configuration of BUTTON_EXTI13_Pin (GPIO-C Pin-13) as AF,
+	GPIO_InitStructButton.Pin = BUTTON_EXTI13_Pin;
+	GPIO_InitStructButton.Mode = GPIO_MODE_IT_FALLING;
+	GPIO_InitStructButton.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(BUTTON_EXTI13_GPIO_Port, &GPIO_InitStructButton);
+
+	// set INT1 EXTI 11 as interrupt for LSM6DSL
+	GPIO_InitTypeDef GPIO_InitStructLSM6DSL = {0};
+	GPIO_InitStructLSM6DSL.Pin = LSM6DSL_INT1_EXTI11_Pin;
+	GPIO_InitStructLSM6DSL.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStructLSM6DSL.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(LSM6DSL_INT1_EXTI11_GPIO_Port, &GPIO_InitStructLSM6DSL);
+
+	// Enable NVIC EXTI line 13
+	HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+
+	// Buzzer
+	GPIO_InitTypeDef GPIO_InitStructBuzzer = {0};
+	/* Configuration of ARD_D4_Pin GPIO_PIN_3  ARD_D4_GPIO_Port GPIOA*/
+	GPIO_InitStructBuzzer.Pin = ARD_D4_Pin;
+	GPIO_InitStructBuzzer.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStructBuzzer.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(ARD_D4_GPIO_Port, &GPIO_InitStructBuzzer);
+	HAL_GPIO_WritePin(ARD_D4_GPIO_Port, ARD_D4_Pin, GPIO_PIN_RESET);
+
+	// Light Sensor
+	__HAL_RCC_ADC_CLK_ENABLE();
+	GPIO_InitTypeDef GPIO_InitStructLightSensor = {0};
+	GPIO_InitStructLightSensor.Pin = ARD_A0_Pin;
+	GPIO_InitStructLightSensor.Mode = GPIO_MODE_ANALOG_ADC_CONTROL;
+	GPIO_InitStructBuzzer.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(ARD_A0_GPIO_Port, &GPIO_InitStructLightSensor);
+
+	ADC_HandlerLightSensor.Instance = ADC1;
+	ADC_HandlerLightSensor.Init.ClockPrescaler        = ADC_CLOCK_ASYNC_DIV4;
+	ADC_HandlerLightSensor.Init.Resolution            = ADC_RESOLUTION_12B;
+	ADC_HandlerLightSensor.Init.DataAlign             = ADC_DATAALIGN_RIGHT;
+	ADC_HandlerLightSensor.Init.ScanConvMode          = ADC_SCAN_DISABLE;
+	ADC_HandlerLightSensor.Init.EOCSelection          = ADC_EOC_SINGLE_CONV;
+	ADC_HandlerLightSensor.Init.ContinuousConvMode    = DISABLE;
+	ADC_HandlerLightSensor.Init.NbrOfConversion       = 1;
+	ADC_HandlerLightSensor.Init.DiscontinuousConvMode = DISABLE;
+	ADC_HandlerLightSensor.Init.ExternalTrigConv      = ADC_SOFTWARE_START;
+	ADC_HandlerLightSensor.Init.ExternalTrigConvEdge  = ADC_EXTERNALTRIGCONVEDGE_NONE;
+	ADC_HandlerLightSensor.Init.Overrun               = ADC_OVR_DATA_PRESERVED;
+	ADC_HandlerLightSensor.Init.OversamplingMode      = DISABLE;
+
+	HAL_ADC_Init(&ADC_HandlerLightSensor);
+
+	// Calibrate once after init
+	HAL_ADCEx_Calibration_Start(&ADC_HandlerLightSensor, ADC_SINGLE_ENDED);
+
+	// 3) Channel config — ***pick the channel that matches A0***
+	ADC_ChannelConfTypeDef Config = {0};
+	Config.Channel      = ADC_CHANNEL_14;                 // PC5 → IN14
+	Config.Rank         = ADC_REGULAR_RANK_1;
+	Config.SamplingTime = ADC_SAMPLETIME_247CYCLES_5;     // long sample (LDR divider)
+	Config.SingleDiff   = ADC_SINGLE_ENDED;
+	Config.OffsetNumber = ADC_OFFSET_NONE;
+	Config.Offset       = 0;
+	HAL_ADC_ConfigChannel(&ADC_HandlerLightSensor, &Config);
+
+
+	// I2C
+	__HAL_RCC_I2C1_CLK_ENABLE();
+	GPIO_InitTypeDef GPIO_InitStructOLED = {0};
+
+	// PB8 -> I2C1_SCL, PB9 -> I2C1_SDA
+	GPIO_InitStructOLED.Pin       = ARD_D15_Pin | ARD_D14_Pin;
+	GPIO_InitStructOLED.Mode      = GPIO_MODE_AF_OD;          // open-drain for I2C
+	GPIO_InitStructOLED.Pull      = GPIO_PULLUP;              // needs pull-ups
+	GPIO_InitStructOLED.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
+	GPIO_InitStructOLED.Alternate = GPIO_AF4_I2C1;            // AF4 on L4
+	HAL_GPIO_Init(ARD_D14_GPIO_Port, &GPIO_InitStructOLED);
+
+	hi2c.Instance             = I2C1;
+	hi2c.Init.Timing          = 0x00707CBB;
+	hi2c.Init.OwnAddress1 = 0;
+	hi2c.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+	hi2c.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+	hi2c.Init.OwnAddress2 = 0;
+	hi2c.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+	hi2c.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+	hi2c.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+	if (GPIO_Pin == LSM6DSL_INT1_EXTI11_Pin) {
+		while(1) {
+			continue;
+		}
+	}
+
+	if(GPIO_Pin == BUTTON_EXTI13_Pin) {
+		char message_print[32];
+
+		char message[] = "Blue button is pressed\r\n"; // Fixed message
+		sprintf(message_print, "%s", message);
+		HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+
+		if (buttonActive == false) {
+			buttonActive = true;
+			buttonPressTime = HAL_GetTick();
+		} else if (HAL_GetTick()-buttonPressTime > BUTTON_DURATION) {
+			buttonActive = false;
+		} else {
+			buttonActive = false;
+			toggleState();
+		}
+
+
+		if (nearbyFlag) {
+			if (isPlayer) {
+				char message[] = "Player escaped, good job!\r\n"; // Fixed message
+				sprintf(message_print, "%s", message);
+				HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+			} else {
+				char message[] = "Player captured, good job!\r\n"; // Fixed message
+				sprintf(message_print, "%s", message);
+				HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+			}
+			nearbyFlag = false;
+		}
+	}
+}
 
 // Helper Methods
 float TemperatureSensorHelper(bool output) {
@@ -197,80 +352,34 @@ void LEDBlinkHelper(int modulo) {
 	}
 }
 
-// GPIO
-static void MX_GPIO_Init(void) {
-	// LED
-	/* GPIO Ports Clock Enable */
-	__HAL_RCC_GPIOB_CLK_ENABLE();
-	GPIO_InitTypeDef GPIO_InitStructLED = {0};
-
-	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(GPIOB, LED2_Pin, GPIO_PIN_RESET);
-
-	/*Configure GPIO pin LED2_Pin */
-	GPIO_InitStructLED.Pin = LED2_Pin;
-	GPIO_InitStructLED.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStructLED.Pull = GPIO_NOPULL;
-	GPIO_InitStructLED.Speed = GPIO_SPEED_FREQ_LOW;
-	HAL_GPIO_Init(GPIOB, &GPIO_InitStructLED);
-
-
-	// BUTTON
-	__HAL_RCC_GPIOC_CLK_ENABLE();	// Enable AHB2 Bus for GPIOC
-	GPIO_InitTypeDef GPIO_InitStructButton = {0};
-
-	// Configuration of BUTTON_EXTI13_Pin (GPIO-C Pin-13) as AF,
-	GPIO_InitStructButton.Pin = BUTTON_EXTI13_Pin;
-	GPIO_InitStructButton.Mode = GPIO_MODE_IT_FALLING;
-	GPIO_InitStructButton.Pull = GPIO_NOPULL;
-	HAL_GPIO_Init(BUTTON_EXTI13_GPIO_Port, &GPIO_InitStructButton);
-
-
-
-	// set INT1 EXTI 11 as interrupt for LSM6DSL
-	GPIO_InitTypeDef GPIO_InitStructLSM6DSL = {0};
-	GPIO_InitStructLSM6DSL.Pin = LSM6DSL_INT1_EXTI11_Pin;
-	GPIO_InitStructLSM6DSL.Mode = GPIO_MODE_IT_RISING;
-	GPIO_InitStructLSM6DSL.Pull = GPIO_NOPULL;
-	HAL_GPIO_Init(LSM6DSL_INT1_EXTI11_GPIO_Port, &GPIO_InitStructLSM6DSL);
-
-	// Enable NVIC EXTI line 13
-	HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+uint16_t ReadLightSensorRaw(void) {
+    HAL_ADC_Start(&ADC_HandlerLightSensor);
+    HAL_ADC_PollForConversion(&ADC_HandlerLightSensor, 10);
+    uint16_t val = (uint16_t)HAL_ADC_GetValue(&ADC_HandlerLightSensor);
+    HAL_ADC_Stop(&ADC_HandlerLightSensor);
+    return val; // 0..4095 for 12-bit
 }
 
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-	if(GPIO_Pin == BUTTON_EXTI13_Pin) {
-		char message_print[32];
-
-		char message[] = "Blue button is pressed\r\n"; // Fixed message
-		sprintf(message_print, "%s", message);
-		HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
-
-		if (buttonActive == false) {
-			buttonActive = true;
-			buttonPressTime = HAL_GetTick();
-		} else if (HAL_GetTick()-buttonPressTime > BUTTON_DURATION) {
-			buttonActive = false;
-		} else {
-			buttonActive = false;
-			toggleState();
-		}
-
-
-		if (nearbyFlag) {
-			if (isPlayer) {
-				char message[] = "Player escaped, good job!\r\n"; // Fixed message
-				sprintf(message_print, "%s", message);
-				HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
-			} else {
-				char message[] = "Player captured, good job!\r\n"; // Fixed message
-				sprintf(message_print, "%s", message);
-				HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
-			}
-			nearbyFlag = false;
-		}
+bool isLightSensor(void) {
+	if (HAL_GPIO_ReadPin(ARD_A0_GPIO_Port, ARD_A0_Pin)) {
+		return true;
 	}
+	return false;
 }
+
+void I2C_ScanBus(I2C_HandleTypeDef *hi2c)
+{
+    for (uint16_t addr = 1; addr < 0x80; addr++) {
+        if (HAL_I2C_IsDeviceReady(hi2c, (uint16_t)(addr << 1), 1, 5) == HAL_OK) {
+            // Found a device at 7-bit address 'addr'
+            // (Use your own print/log function)
+        	char message[16];
+			sprintf(message, "I2C device at: 0x%02X\r\n", addr);
+			HAL_UART_Transmit(&huart1,(uint8_t*)message, strlen(message),0xFFFF);
+        }
+    }
+}
+
 
 
 // Custom Class for Switching
@@ -338,7 +447,8 @@ void RedLightGreenLight_update(void) {
 
 
 	if (isGreen) {
-		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET); // constant HIGH
+		HAL_GPIO_WritePin(ARD_D13_GPIO_Port, ARD_D13_Pin, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
 		lastCaptured = false;
 
 		if (HAL_GetTick() % 2000 < 10) {
@@ -354,7 +464,9 @@ void RedLightGreenLight_update(void) {
 		}
 
 		if (HAL_GetTick() - lastLEDToggle >= 500) {
-			HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14);
+			HAL_GPIO_TogglePin(ARD_D13_GPIO_Port, ARD_D13_Pin);
+			HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin);
+
 		    lastLEDToggle = HAL_GetTick();
 		}
 
@@ -380,6 +492,7 @@ void RedLightGreenLight_update(void) {
 		}
 	}
 }
+
 void RedLightGreenLight_exit(void) {
     char message[] = "--- State Exiting: RedLightGreenLight ---\r\n"; // Fixed message
 	char message_print[64];
@@ -533,15 +646,6 @@ void endState(void) {
 void setup(void) {
 	// initialise_monitor_handles(); // for semi-hosting support (printf)
 
-	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-	HAL_Init();
-
-	// GPIO Pins
-	MX_GPIO_Init();
-
-	/* UART initialization */
-	UART1_Init();
-
 	/* Peripheral initializations using BSP functions */
 	BSP_TSENSOR_Init();
 	BSP_PSENSOR_Init();
@@ -549,6 +653,18 @@ void setup(void) {
 	BSP_ACCELERO_Init();
 	BSP_GYRO_Init();
 	BSP_MAGNETO_Init();
+
+	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+	HAL_Init();
+
+	// GPIO Pins
+	MX_GPIO_Init();
+	SENSOR_IO_Write(0xD4, 0x0D, 0x03);
+
+	/* UART initialization */
+	UART1_Init();
+
+	I2C_ScanBus(&hi2c);
 
 	// My state machine
 	currentState = &RedLightGreenLightState;
@@ -559,7 +675,7 @@ void setup(void) {
 // Main Program Code
 int main(void) {
 	setup();
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET); // constant HIGH
+
 	while (programRunning) {
 		currentState->update();
 	}
