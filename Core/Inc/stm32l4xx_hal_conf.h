@@ -36,7 +36,7 @@
   * @brief This is the list of modules to be used in the HAL driver
   */
 #define HAL_MODULE_ENABLED
-/*#define HAL_ADC_MODULE_ENABLED   */
+#define HAL_ADC_MODULE_ENABLED
 /*#define HAL_CRYP_MODULE_ENABLED   */
 /*#define HAL_CAN_MODULE_ENABLED   */
 /*#define HAL_COMP_MODULE_ENABLED   */
@@ -55,7 +55,7 @@
 /*#define HAL_IRDA_MODULE_ENABLED   */
 /*#define HAL_IWDG_MODULE_ENABLED   */
 /*#define HAL_LTDC_MODULE_ENABLED   */
-/*#define HAL_LCD_MODULE_ENABLED   */
+#define HAL_LCD_MODULE_ENABLED
 /*#define HAL_LPTIM_MODULE_ENABLED   */
 /*#define HAL_MMC_MODULE_ENABLED   */
 /*#define HAL_NAND_MODULE_ENABLED   */
@@ -78,9 +78,9 @@
 /*#define HAL_SWPMI_MODULE_ENABLED   */
 /*#define HAL_TSC_MODULE_ENABLED   */
 #define HAL_UART_MODULE_ENABLED
-/*#define HAL_USART_MODULE_ENABLED   */
+#define HAL_USART_MODULE_ENABLED
 /*#define HAL_WWDG_MODULE_ENABLED   */
-/*#define HAL_EXTI_MODULE_ENABLED   */
+#define HAL_EXTI_MODULE_ENABLED   */
 /*#define HAL_PSSI_MODULE_ENABLED   */
 #define HAL_GPIO_MODULE_ENABLED
 #define HAL_EXTI_MODULE_ENABLED

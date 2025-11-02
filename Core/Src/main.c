@@ -26,16 +26,25 @@
 // GPIO
 static void MX_GPIO_Init(void);
 
-// Log
+// Global Variables
 // extern void initialise_monitor_handles(void);	// Log for semi-hosting support (printf)
 static void UART1_Init(void); // UART Serial RxTx
+static UART_HandleTypeDef huart1; // Serial RxTx
+static ADC_HandleTypeDef ADC_HandlerLightSensor;
 
+/* Grove - OLED Display 0.96inch - SSD1308 - width in pixels */
+#define SSD1308_WIDTH 128
+/* SSD1308 height in pixels */
+#define SSD1308_HEIGHT 64
+/* SSD1308 I2C Address */
+#define SSD1308_ADDR (0x3C << 1) // 0x3C is 7bits but HAL expects 8bits
+static I2C_HandleTypeDef hi2c1;
+#define I2C_SPEED_HZ 4000000  // The same as System Clock
+#define PCLK1_FREQ_HZ 4000000  //
 
-// Serial RxTx
-UART_HandleTypeDef huart1;
 int BUTTON_DURATION = 600; // 600 tick/ms for GetTick()
 static bool buttonActive = false;
-static bool isPlayer = true;
+static bool isPlayer = false;
 static int buttonPressTime;
 static bool nearbyFlag = false;
 static int nearbyStartTime;
@@ -43,11 +52,11 @@ static int nearbyStartTime;
 static void UART1_Init(void) {
 	/* Pin configuration for UART. BSP_COM_Init() can do
 	this automatically */
-	__HAL_RCC_GPIOB_CLK_ENABLE();
 	__HAL_RCC_USART1_CLK_ENABLE();
+
 	GPIO_InitTypeDef GPIO_InitStruct = {0};
+	GPIO_InitStruct.Pin = ST_LINK_UART1_RX_Pin | ST_LINK_UART1_TX_Pin;
 	GPIO_InitStruct.Alternate = GPIO_AF7_USART1;
-	GPIO_InitStruct.Pin = GPIO_PIN_7|GPIO_PIN_6;
 	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
@@ -69,6 +78,162 @@ static void UART1_Init(void) {
 	}
 }
 
+// GPIO
+static void MX_GPIO_Init(void) {
+	/* GPIO Ports Clock Enable */
+	__HAL_RCC_GPIOA_CLK_ENABLE(); // LED 1
+	__HAL_RCC_GPIOB_CLK_ENABLE(); // For LED 2
+	__HAL_RCC_GPIOC_CLK_ENABLE(); // Enable AHB2 Bus for GPIOC for Button
+	__HAL_RCC_GPIOD_CLK_ENABLE(); // For LSM6DSL
+
+	// LED 1
+	GPIO_InitTypeDef GPIO_InitStructLED1 = {0};
+	/*Configure GPIO pin ARD_D13_Pin / LED1 */
+	GPIO_InitStructLED1.Pin = ARD_D13_Pin;
+	GPIO_InitStructLED1.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStructLED1.Pull = GPIO_NOPULL;
+	GPIO_InitStructLED1.Speed = GPIO_SPEED_FREQ_LOW;
+	HAL_GPIO_Init(ARD_D13_GPIO_Port, &GPIO_InitStructLED1);
+	HAL_GPIO_WritePin(ARD_D13_GPIO_Port, ARD_D13_Pin, GPIO_PIN_RESET);  // configure LED1 to LOW
+
+	// LED 2
+	GPIO_InitTypeDef GPIO_InitStructLED2 = {0};
+	/*Configure GPIO pin LED2_Pin */
+	GPIO_InitStructLED2.Pin = LED2_Pin;
+	GPIO_InitStructLED2.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStructLED2.Pull = GPIO_NOPULL;
+	GPIO_InitStructLED2.Speed = GPIO_SPEED_FREQ_LOW;
+	HAL_GPIO_Init(LED2_GPIO_Port, &GPIO_InitStructLED2);
+	HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_RESET);  // configure LED2 to LOW
+
+	// BUTTON
+	GPIO_InitTypeDef GPIO_InitStructButton = {0};
+	// Configuration of BUTTON_EXTI13_Pin (GPIO-C Pin-13) as AF,
+	GPIO_InitStructButton.Pin = BUTTON_EXTI13_Pin;
+	GPIO_InitStructButton.Mode = GPIO_MODE_IT_FALLING;
+	GPIO_InitStructButton.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(BUTTON_EXTI13_GPIO_Port, &GPIO_InitStructButton);
+
+	// set INT1 EXTI 11 as interrupt for LSM6DSL
+	GPIO_InitTypeDef GPIO_InitStructLSM6DSL = {0};
+	GPIO_InitStructLSM6DSL.Pin = LSM6DSL_INT1_EXTI11_Pin;
+	GPIO_InitStructLSM6DSL.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStructLSM6DSL.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(LSM6DSL_INT1_EXTI11_GPIO_Port, &GPIO_InitStructLSM6DSL);
+
+	// Enable NVIC EXTI line 13
+	HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+
+	// Buzzer
+	GPIO_InitTypeDef GPIO_InitStructBuzzer = {0};
+	/* Configuration of ARD_D4_Pin GPIO_PIN_3  ARD_D4_GPIO_Port GPIOA*/
+	GPIO_InitStructBuzzer.Pin = ARD_D4_Pin;
+	GPIO_InitStructBuzzer.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStructBuzzer.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(ARD_D4_GPIO_Port, &GPIO_InitStructBuzzer);
+	HAL_GPIO_WritePin(ARD_D4_GPIO_Port, ARD_D4_Pin, GPIO_PIN_RESET);
+
+	// Light Sensor
+	__HAL_RCC_ADC_CLK_ENABLE();
+	GPIO_InitTypeDef GPIO_InitStructLightSensor = {0};
+	GPIO_InitStructLightSensor.Pin = ARD_A0_Pin;
+	GPIO_InitStructLightSensor.Mode = GPIO_MODE_ANALOG_ADC_CONTROL;
+	GPIO_InitStructBuzzer.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(ARD_A0_GPIO_Port, &GPIO_InitStructLightSensor);
+
+	ADC_HandlerLightSensor.Instance = ADC1;
+	ADC_HandlerLightSensor.Init.ClockPrescaler        = ADC_CLOCK_ASYNC_DIV4;
+	ADC_HandlerLightSensor.Init.Resolution            = ADC_RESOLUTION_12B;
+	ADC_HandlerLightSensor.Init.DataAlign             = ADC_DATAALIGN_RIGHT;
+	ADC_HandlerLightSensor.Init.ScanConvMode          = ADC_SCAN_DISABLE;
+	ADC_HandlerLightSensor.Init.EOCSelection          = ADC_EOC_SINGLE_CONV;
+	ADC_HandlerLightSensor.Init.ContinuousConvMode    = DISABLE;
+	ADC_HandlerLightSensor.Init.NbrOfConversion       = 1;
+	ADC_HandlerLightSensor.Init.DiscontinuousConvMode = DISABLE;
+	ADC_HandlerLightSensor.Init.ExternalTrigConv      = ADC_SOFTWARE_START;
+	ADC_HandlerLightSensor.Init.ExternalTrigConvEdge  = ADC_EXTERNALTRIGCONVEDGE_NONE;
+	ADC_HandlerLightSensor.Init.Overrun               = ADC_OVR_DATA_PRESERVED;
+	ADC_HandlerLightSensor.Init.OversamplingMode      = DISABLE;
+
+	HAL_ADC_Init(&ADC_HandlerLightSensor);
+
+	// Calibrate once after init
+	HAL_ADCEx_Calibration_Start(&ADC_HandlerLightSensor, ADC_SINGLE_ENDED);
+
+	// 3) Channel config — ***pick the channel that matches A0***
+	ADC_ChannelConfTypeDef Config = {0};
+	Config.Channel      = ADC_CHANNEL_14;                 // PC5 → IN14
+	Config.Rank         = ADC_REGULAR_RANK_1;
+	Config.SamplingTime = ADC_SAMPLETIME_247CYCLES_5;     // long sample (LDR divider)
+	Config.SingleDiff   = ADC_SINGLE_ENDED;
+	Config.OffsetNumber = ADC_OFFSET_NONE;
+	Config.Offset       = 0;
+	HAL_ADC_ConfigChannel(&ADC_HandlerLightSensor, &Config);
+
+
+	// I2C
+	__HAL_RCC_I2C1_CLK_ENABLE();
+	GPIO_InitTypeDef GPIO_InitStructI2C1 = {0};
+
+	// PB8 -> I2C1_SCL, PB9 -> I2C1_SDA
+	GPIO_InitStructI2C1.Pin       = ARD_D15_Pin | ARD_D14_Pin;
+	GPIO_InitStructI2C1.Mode      = GPIO_MODE_AF_OD;          // open-drain for I2C
+	GPIO_InitStructI2C1.Pull      = GPIO_PULLUP;              // needs pull-ups
+	GPIO_InitStructI2C1.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
+	GPIO_InitStructI2C1.Alternate = GPIO_AF4_I2C1;            // AF4 on L4
+	HAL_GPIO_Init(ARD_D14_GPIO_Port, &GPIO_InitStructI2C1);
+
+	hi2c1.Instance = I2C1;
+	hi2c1.Init.Timing = 0x00320F13; // TIMINGR = (PRESC<<28) | (SCLDEL<<20) | (SDADEL<<16) | (SCLH<<8) | SCLL
+	hi2c1.Init.OwnAddress1 = 0;
+	hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+	hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+	hi2c1.Init.OwnAddress2 = 0;
+	hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+	hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE; // Master sends a signal to all I2C devices
+	hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE; // Disabling so slow slave to hold the clock line low to extend the clock pulse duration, giving it more time to process data.
+	HAL_I2C_Init(&hi2c1);
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+	if (GPIO_Pin == LSM6DSL_INT1_EXTI11_Pin) {
+		while(1) {
+			continue;
+		}
+	}
+
+	if(GPIO_Pin == BUTTON_EXTI13_Pin) {
+		char message_print[32];
+
+		char message[] = "Blue button is pressed\r\n"; // Fixed message
+		sprintf(message_print, "%s", message);
+		HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+
+		if (buttonActive == false) {
+			buttonActive = true;
+			buttonPressTime = HAL_GetTick();
+		} else if (HAL_GetTick()-buttonPressTime > BUTTON_DURATION) {
+			buttonActive = false;
+		} else {
+			buttonActive = false;
+			toggleState();
+		}
+
+
+		if (nearbyFlag) {
+			if (isPlayer) {
+				char message[] = "Player escaped, good job!\r\n"; // Fixed message
+				sprintf(message_print, "%s", message);
+				HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+			} else {
+				char message[] = "Player captured, good job!\r\n"; // Fixed message
+				sprintf(message_print, "%s", message);
+				HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+			}
+			nearbyFlag = false;
+		}
+	}
+}
 
 // Helper Methods
 float TemperatureSensorHelper(bool output) {
@@ -197,79 +362,202 @@ void LEDBlinkHelper(int modulo) {
 	}
 }
 
-// GPIO
-static void MX_GPIO_Init(void) {
-	// LED
-	/* GPIO Ports Clock Enable */
-	__HAL_RCC_GPIOB_CLK_ENABLE();
-	GPIO_InitTypeDef GPIO_InitStructLED = {0};
-
-	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(GPIOB, LED2_Pin, GPIO_PIN_RESET);
-
-	/*Configure GPIO pin LED2_Pin */
-	GPIO_InitStructLED.Pin = LED2_Pin;
-	GPIO_InitStructLED.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStructLED.Pull = GPIO_NOPULL;
-	GPIO_InitStructLED.Speed = GPIO_SPEED_FREQ_LOW;
-	HAL_GPIO_Init(GPIOB, &GPIO_InitStructLED);
-
-
-	// BUTTON
-	__HAL_RCC_GPIOC_CLK_ENABLE();	// Enable AHB2 Bus for GPIOC
-	GPIO_InitTypeDef GPIO_InitStructButton = {0};
-
-	// Configuration of BUTTON_EXTI13_Pin (GPIO-C Pin-13) as AF,
-	GPIO_InitStructButton.Pin = BUTTON_EXTI13_Pin;
-	GPIO_InitStructButton.Mode = GPIO_MODE_IT_FALLING;
-	GPIO_InitStructButton.Pull = GPIO_NOPULL;
-	HAL_GPIO_Init(GPIOC, &GPIO_InitStructButton);
-
-	// Enable NVIC EXTI line 13
-	HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
-
-	// set INT1 EXTI 11 as interrupt for LSM6DSL
-	GPIO_InitTypeDef GPIO_InitStructLSM6DSL = {0};
-	GPIO_InitStructLSM6DSL.Pin = LSM6DSL_INT1_EXTI11_GPIO_Port;
-	GPIO_InitStructLSM6DSL.Mode = GPIO_MODE_IT_FALLING;
-	GPIO_InitStructLSM6DSL.Pull = GPIO_NOPULL;
-	HAL_GPIO_Init(LSM6DSL_INT1_EXTI11_GPIO_Port, &GPIO_InitStructLSM6DSL);
+uint16_t ReadLightSensorRaw(void) {
+    HAL_ADC_Start(&ADC_HandlerLightSensor);
+    HAL_ADC_PollForConversion(&ADC_HandlerLightSensor, 10);
+    uint16_t val = (uint16_t)HAL_ADC_GetValue(&ADC_HandlerLightSensor);
+    HAL_ADC_Stop(&ADC_HandlerLightSensor);
+    return val; // 0..4095 for 12-bit
 }
 
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-	if(GPIO_Pin == BUTTON_EXTI13_Pin) {
-		char message_print[32];
-
-		char message[] = "Blue button is pressed\r\n"; // Fixed message
-		sprintf(message_print, "%s", message);
-		HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
-
-		if (buttonActive == false) {
-			buttonActive = true;
-			buttonPressTime = HAL_GetTick();
-		} else if (HAL_GetTick()-buttonPressTime > BUTTON_DURATION) {
-			buttonActive = false;
-		} else {
-			buttonActive = false;
-			toggleState();
-		}
-
-
-		if (nearbyFlag) {
-			if (isPlayer) {
-				char message[] = "Player escaped, good job!\r\n"; // Fixed message
-				sprintf(message_print, "%s", message);
-				HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
-			} else {
-				char message[] = "Player captured, good job!\r\n"; // Fixed message
-				sprintf(message_print, "%s", message);
-				HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
-			}
-			nearbyFlag = false;
-		}
+bool isLightSensor(void) {
+	if (HAL_GPIO_ReadPin(ARD_A0_GPIO_Port, ARD_A0_Pin)) {
+		return true;
 	}
+	return false;
 }
 
+void I2C_Write_Example(void) {
+    uint8_t buf[] = {0x00, 0xAF};
+    HAL_I2C_Master_Transmit(&hi2c1, SSD1308_ADDR, buf, sizeof(buf), 100 /*ms timeout*/);
+}
+
+static HAL_StatusTypeDef oled_write_data(const uint8_t *data, uint16_t len) {
+    // We prepend the data control byte (0x40)
+    // For large transfers, you can chunk it; this small helper sends in one go if len is modest.
+    HAL_StatusTypeDef st;
+    // stack-friendly small chunking
+    uint16_t offset = 0;
+    while (offset < len) {
+        uint16_t chunk = (len - offset);
+        if (chunk > 16) chunk = 16; // conservative chunk to avoid big I2C bursts
+        uint8_t buf[1 + 16];
+        buf[0] = 0x40;
+        memcpy(&buf[1], &data[offset], chunk);
+        st = HAL_I2C_Master_Transmit(&hi2c1, (uint16_t)SSD1308_ADDR, buf, (uint16_t)(1 + chunk), 100 /* I2C_TIMEOUT_MS */);
+        if (st != HAL_OK) return st;
+        offset += chunk;
+    }
+    return HAL_OK;
+}
+static HAL_StatusTypeDef oled_write_cmd(uint8_t cmd) {
+    uint8_t b[2] = {0x00, cmd };
+    return HAL_I2C_Master_Transmit(&hi2c1, (uint16_t)SSD1308_ADDR, b, sizeof(b), 100 /* I2C_TIMEOUT_MS */);
+}
+
+static HAL_StatusTypeDef oled_write_cmd2(uint8_t cmd0, uint8_t cmd1) {
+    uint8_t b[3] = {0x00, cmd0, cmd1 };
+    return HAL_I2C_Master_Transmit(&hi2c1, (uint16_t)SSD1308_ADDR, b, sizeof(b), 100 /* I2C_TIMEOUT_MS */);
+}
+
+static HAL_StatusTypeDef oled_clear() {
+    HAL_StatusTypeDef st;
+
+    // Make sure it shows RAM (not forced all-pixels-on) and normal polarity
+    if ((st = oled_write_cmd(0xA4)) != HAL_OK) return st; // Resume RAM content display
+    if ((st = oled_write_cmd(0xA6)) != HAL_OK) return st; // Normal (not inverted)
+
+    // Horizontal addressing; full window
+    if ((st = oled_write_cmd2(0x20, 0x00)) != HAL_OK) return st; // Addressing mode = horizontal
+    if ((st = oled_write_cmd2(0x21, 0x00)) != HAL_OK) return st; // Column start
+    if ((st = oled_write_cmd(127)) != HAL_OK) return st;         // Column end (0..127)
+    if ((st = oled_write_cmd2(0x22, 0x00)) != HAL_OK) return st; // Page start
+    if ((st = oled_write_cmd(7)) != HAL_OK) return st;           // Page end (0..7 for 64px)
+
+    // Stream zeros across the whole screen: 128 cols × 8 pages = 1024 bytes
+    uint8_t zeros[16] = {0};  // small chunk buffer
+    for (int i = 0; i < (128 * 8) / (int)sizeof(zeros); i++) {
+        st = oled_write_data(zeros, sizeof(zeros));  // prepends 0x40 inside helper
+        if (st != HAL_OK) return st;
+    }
+    return HAL_OK;
+}
+
+static uint8_t g_fb[SSD1308_WIDTH * (SSD1308_HEIGHT/8)];   // 1,024 bytes
+static const uint8_t font5x7[][5] = {
+    // ' ' (32)
+    {0x00,0x00,0x00,0x00,0x00},
+    // '0'..'9' (48..57)
+    {0x3E,0x51,0x49,0x45,0x3E}, // '0'
+    {0x00,0x42,0x7F,0x40,0x00}, // '1'
+    {0x42,0x61,0x51,0x49,0x46}, // '2'
+    {0x21,0x41,0x45,0x4B,0x31}, // '3'
+    {0x18,0x14,0x12,0x7F,0x10}, // '4'
+    {0x27,0x45,0x45,0x45,0x39}, // '5'
+    {0x3C,0x4A,0x49,0x49,0x30}, // '6'
+    {0x01,0x71,0x09,0x05,0x03}, // '7'
+    {0x36,0x49,0x49,0x49,0x36}, // '8'
+    {0x06,0x49,0x49,0x29,0x1E}, // '9'
+    // 'A'..'Z' (65..90)
+    {0x7E,0x11,0x11,0x11,0x7E}, // 'A'
+    {0x7F,0x49,0x49,0x49,0x36}, // 'B'
+    {0x3E,0x41,0x41,0x41,0x22}, // 'C'
+    {0x7F,0x41,0x41,0x22,0x1C}, // 'D'
+    {0x7F,0x49,0x49,0x49,0x41}, // 'E'
+    {0x7F,0x09,0x09,0x09,0x01}, // 'F'
+    {0x3E,0x41,0x49,0x49,0x7A}, // 'G'
+    {0x7F,0x08,0x08,0x08,0x7F}, // 'H'
+    {0x00,0x41,0x7F,0x41,0x00}, // 'I'
+    {0x20,0x40,0x41,0x3F,0x01}, // 'J'
+    {0x7F,0x08,0x14,0x22,0x41}, // 'K'
+    {0x7F,0x40,0x40,0x40,0x40}, // 'L'
+    {0x7F,0x02,0x0C,0x02,0x7F}, // 'M'
+    {0x7F,0x04,0x08,0x10,0x7F}, // 'N'
+    {0x3E,0x41,0x41,0x41,0x3E}, // 'O'
+    {0x7F,0x09,0x09,0x09,0x06}, // 'P'
+    {0x3E,0x41,0x51,0x21,0x5E}, // 'Q'
+    {0x7F,0x09,0x19,0x29,0x46}, // 'R'
+    {0x46,0x49,0x49,0x49,0x31}, // 'S'
+    {0x01,0x01,0x7F,0x01,0x01}, // 'T'
+    {0x3F,0x40,0x40,0x40,0x3F}, // 'U'
+    {0x1F,0x20,0x40,0x20,0x1F}, // 'V'
+    {0x7F,0x20,0x18,0x20,0x7F}, // 'W'
+    {0x63,0x14,0x08,0x14,0x63}, // 'X'
+    {0x07,0x08,0x70,0x08,0x07}, // 'Y'
+    {0x61,0x51,0x49,0x45,0x43}, // 'Z'
+    // '-' '.' ':'
+    {0x08,0x08,0x08,0x08,0x08}, // '-'
+    {0x00,0x60,0x60,0x00,0x00}, // '.'
+    {0x00,0x36,0x36,0x00,0x00}, // ':'
+};
+static inline const uint8_t* glyph_for(char c) {
+    if (c == ' ') return font5x7[0];
+    if (c >= '0' && c <= '9') return font5x7[1 + (c - '0')];
+    if (c >= 'A' && c <= 'Z') return font5x7[11 + (c - 'A')];
+    if (c == '-') return font5x7[11 + 26];
+    if (c == '.') return font5x7[11 + 27];
+    if (c == ':') return font5x7[11 + 28];
+    // Fallback: blank
+    return font5x7[0];
+}
+static void fb_set_pixel(int x, int y, int on) {
+    if (x < 0 || x >= SSD1308_WIDTH || y < 0 || y >= SSD1308_HEIGHT) return;
+    int page = y >> 3;
+    uint8_t bit = 1u << (y & 7);
+    uint8_t *b = &g_fb[page * SSD1308_WIDTH + x];
+    if (on) *b |= bit;
+    else    *b &= (uint8_t)~bit;
+}
+
+static void fb_clear(void) {
+    memset(g_fb, 0x00, sizeof(g_fb));
+}
+
+// Draw a 5x7 glyph with 1px spacing; returns advance (6 px)
+static int fb_draw_char(int x, int y, char c) {
+    const uint8_t *g = glyph_for(c);
+    for (int col = 0; col < 5; col++) {
+        uint8_t colbits = g[col]; // bit0 = top pixel
+        for (int row = 0; row < 7; row++) {
+            int on = (colbits >> row) & 1;
+            fb_set_pixel(x + col, y + row, on);
+        }
+    }
+    // 1 column spacing
+    for (int row = 0; row < 7; row++) fb_set_pixel(x + 5, y + row, 0);
+    return 6;
+}
+static void fb_draw_text(int x, int y, const char *s) {
+    int cx = x;
+    while (*s) {
+        if (*s == '\n') { y += 8; cx = x; s++; continue; }
+        cx += fb_draw_char(cx, y, *s++);
+        if (cx > SSD1308_WIDTH - 6) { y += 8; cx = x; } // wrap to next row
+        if (y > SSD1308_HEIGHT - 8) break;
+    }
+}
+static HAL_StatusTypeDef oled_flush_full(void) {
+    HAL_StatusTypeDef st;
+    // Follow RAM & normal polarity (safety)
+    if ((st = oled_write_cmd(0xA4)) != HAL_OK) return st;
+    if ((st = oled_write_cmd(0xA6)) != HAL_OK) return st;
+    // Horizontal addressing; full window
+    if ((st = oled_write_cmd2(0x20, 0x00)) != HAL_OK) return st; // horizontal
+    if ((st = oled_write_cmd2(0x21, 0x00)) != HAL_OK) return st; // col start
+    if ((st = oled_write_cmd(SSD1308_WIDTH - 1)) != HAL_OK) return st;  // col end
+    if ((st = oled_write_cmd2(0x22, 0x00)) != HAL_OK) return st; // page start
+    if ((st = oled_write_cmd((SSD1308_WIDTH/8) - 1)) != HAL_OK) return st; // page end
+
+    // Send whole buffer in small chunks
+    // (Each oled_write_data prepends control byte 0x40)
+    for (int off = 0; off < (int)sizeof(g_fb); ) {
+        int chunk = 16;
+        if (off + chunk > (int)sizeof(g_fb)) chunk = (int)sizeof(g_fb) - off;
+        st = oled_write_data(&g_fb[off], (uint16_t)chunk);
+        if (st != HAL_OK) return st;
+        off += chunk;
+    }
+    return HAL_OK;
+}
+void demo_text() {
+    fb_clear();
+    fb_draw_text(0, 0, "HELLO WORLD");
+    fb_draw_text(0, 8, "T E S T TEST TTT");
+    fb_draw_text(0, 16, "1.2:3.4:5.6:7.8:9");
+    fb_draw_text(0, 24, "SUCK MY BALLS");
+    fb_draw_text(0, 32, "JIA DE");
+    oled_flush_full();
+}
 
 // Custom Class for Switching
 typedef struct {
@@ -336,7 +624,8 @@ void RedLightGreenLight_update(void) {
 
 
 	if (isGreen) {
-		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET); // constant HIGH
+		HAL_GPIO_WritePin(ARD_D13_GPIO_Port, ARD_D13_Pin, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
 		lastCaptured = false;
 
 		if (HAL_GetTick() % 2000 < 10) {
@@ -352,7 +641,9 @@ void RedLightGreenLight_update(void) {
 		}
 
 		if (HAL_GetTick() - lastLEDToggle >= 500) {
-			HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14);
+			HAL_GPIO_TogglePin(ARD_D13_GPIO_Port, ARD_D13_Pin);
+			HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin);
+
 		    lastLEDToggle = HAL_GetTick();
 		}
 
@@ -378,6 +669,7 @@ void RedLightGreenLight_update(void) {
 		}
 	}
 }
+
 void RedLightGreenLight_exit(void) {
     char message[] = "--- State Exiting: RedLightGreenLight ---\r\n"; // Fixed message
 	char message_print[64];
@@ -531,15 +823,6 @@ void endState(void) {
 void setup(void) {
 	// initialise_monitor_handles(); // for semi-hosting support (printf)
 
-	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-	HAL_Init();
-
-	// GPIO Pins
-	MX_GPIO_Init();
-
-	/* UART initialization */
-	UART1_Init();
-
 	/* Peripheral initializations using BSP functions */
 	BSP_TSENSOR_Init();
 	BSP_PSENSOR_Init();
@@ -547,6 +830,20 @@ void setup(void) {
 	BSP_ACCELERO_Init();
 	BSP_GYRO_Init();
 	BSP_MAGNETO_Init();
+
+	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+	HAL_Init();
+
+	// GPIO Pins
+	MX_GPIO_Init();
+	SENSOR_IO_Write(0xD4, 0x0D, 0x03);
+
+	/* UART initialization */
+	UART1_Init();
+
+	I2C_Write_Example(); // on screen
+	oled_clear();
+	demo_text();
 
 	// My state machine
 	currentState = &RedLightGreenLightState;
@@ -557,8 +854,8 @@ void setup(void) {
 // Main Program Code
 int main(void) {
 	setup();
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET); // constant HIGH
-	while (programRunning) {
+
+  	while (programRunning) {
 		currentState->update();
 	}
 }
