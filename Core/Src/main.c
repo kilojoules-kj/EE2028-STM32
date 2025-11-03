@@ -14,6 +14,7 @@
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_accelero.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_gyro.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_magneto.h"
+#include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_nfctag.h"
 // Input Output
 #include "stdio.h"
 // Math.abs
@@ -23,28 +24,30 @@
 #include "string.h"
 
 
-// GPIO
-static void MX_GPIO_Init(void);
-
-// Global Variables
-// extern void initialise_monitor_handles(void);	// Log for semi-hosting support (printf)
+static void MX_GPIO_Init(void); // GPIO
 static void UART1_Init(void); // UART Serial RxTx
+// extern void initialise_monitor_handles(void);	// Log for semi-hosting support (printf)
+/* Global Variables */
 static UART_HandleTypeDef huart1; // Serial RxTx
 static ADC_HandleTypeDef ADC_HandlerLightSensor;
-
+#define HT16K33_ADDR (0x70 << 1) // LED MATRIX
 /* Grove - OLED Display 0.96inch - SSD1308 - width in pixels */
 #define SSD1308_WIDTH 128
 /* SSD1308 height in pixels */
 #define SSD1308_HEIGHT 64
 /* SSD1308 I2C Address */
 #define SSD1308_ADDR (0x3C << 1) // 0x3C is 7bits but HAL expects 8bits
-static I2C_HandleTypeDef hi2c1;
-#define I2C_SPEED_HZ 4000000  // The same as System Clock
-#define PCLK1_FREQ_HZ 4000000
 
-#define HT16K33_ADDR (0x70 << 1) // LED MATRIX
+/* I2C_SPEED_HZ 4000000 //The same as System Clock, PCLK1_FREQ_HZ 4000000*/
+static I2C_HandleTypeDef hi2c1;
+static I2C_HandleTypeDef hi2c2;
+
+/* NFC (8-bit is enough) */
+#define NFCTAG_IT_FIELDFALLING  ((uint8_t)0x08)  // RF field OFF
+#define NFCTAG_IT_FIELDRISING   ((uint8_t)0x10)  // RF field ON
 
 #define GROVE5_ADDR (0x03 << 1) // 5-Way Switch
+
 
 int BUTTON_DURATION = 600; // 600 tick/ms for GetTick()
 static bool buttonActive = false;
@@ -52,6 +55,11 @@ static bool isPlayer = false;
 static int buttonPressTime;
 static bool nearbyFlag = false;
 static int nearbyStartTime;
+
+volatile uint32_t g_nfc_it_flags = 0;
+volatile uint32_t g_nfc_last_irq_ms = 0;
+volatile uint8_t  g_nfc_rf_state = 0;      // 0=OFF, 1=ON
+static   uint32_t g_nfc_last_report_ms = 0; // for UART throttle
 
 static void UART1_Init(void) {
 	/* Pin configuration for UART. BSP_COM_Init() can do
@@ -78,6 +86,7 @@ static void UART1_Init(void) {
 	huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
 
 	if (HAL_UART_Init(&huart1) != HAL_OK) {
+	    HAL_UART_Transmit(&huart1, (uint8_t*)"UART Init Failed\r\n", sizeof("UART Init Failed\r\n") - 1, 100);
 		while(1);
 	}
 }
@@ -85,14 +94,16 @@ static void UART1_Init(void) {
 // GPIO
 static void MX_GPIO_Init(void) {
 	/* GPIO Ports Clock Enable */
+	__HAL_RCC_SYSCFG_CLK_ENABLE();
 	__HAL_RCC_GPIOA_CLK_ENABLE(); // LED 1
 	__HAL_RCC_GPIOB_CLK_ENABLE(); // For LED 2
 	__HAL_RCC_GPIOC_CLK_ENABLE(); // Enable AHB2 Bus for GPIOC for Button
 	__HAL_RCC_GPIOD_CLK_ENABLE(); // For LSM6DSL
+	__HAL_RCC_GPIOE_CLK_ENABLE(); // For NFC Interrupt
 
 	// LED 1
 	GPIO_InitTypeDef GPIO_InitStructLED1 = {0};
-	/*Configure GPIO pin ARD_D13_Pin / LED1 */
+	/* Configure GPIO pin ARD_D13_Pin / LED1 */
 	GPIO_InitStructLED1.Pin = ARD_D13_Pin;
 	GPIO_InitStructLED1.Mode = GPIO_MODE_OUTPUT_PP;
 	GPIO_InitStructLED1.Pull = GPIO_NOPULL;
@@ -102,7 +113,7 @@ static void MX_GPIO_Init(void) {
 
 	// LED 2
 	GPIO_InitTypeDef GPIO_InitStructLED2 = {0};
-	/*Configure GPIO pin LED2_Pin */
+	/* Configure GPIO pin LED2_Pin */
 	GPIO_InitStructLED2.Pin = LED2_Pin;
 	GPIO_InitStructLED2.Mode = GPIO_MODE_OUTPUT_PP;
 	GPIO_InitStructLED2.Pull = GPIO_NOPULL;
@@ -118,15 +129,14 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStructButton.Pull = GPIO_NOPULL;
 	HAL_GPIO_Init(BUTTON_EXTI13_GPIO_Port, &GPIO_InitStructButton);
 
+
 	// set INT1 EXTI 11 as interrupt for LSM6DSL
 	GPIO_InitTypeDef GPIO_InitStructLSM6DSL = {0};
 	GPIO_InitStructLSM6DSL.Pin = LSM6DSL_INT1_EXTI11_Pin;
-	GPIO_InitStructLSM6DSL.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStructLSM6DSL.Mode = GPIO_MODE_IT_RISING;
 	GPIO_InitStructLSM6DSL.Pull = GPIO_NOPULL;
 	HAL_GPIO_Init(LSM6DSL_INT1_EXTI11_GPIO_Port, &GPIO_InitStructLSM6DSL);
 
-	// Enable NVIC EXTI line 13
-	HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
 	// Buzzer
 	GPIO_InitTypeDef GPIO_InitStructBuzzer = {0};
@@ -137,7 +147,7 @@ static void MX_GPIO_Init(void) {
 	HAL_GPIO_Init(ARD_D4_GPIO_Port, &GPIO_InitStructBuzzer);
 	HAL_GPIO_WritePin(ARD_D4_GPIO_Port, ARD_D4_Pin, GPIO_PIN_RESET);
 
-	// Light Sensor
+	/* // Light Sensor
 	__HAL_RCC_ADC_CLK_ENABLE();
 	GPIO_InitTypeDef GPIO_InitStructLightSensor = {0};
 	GPIO_InitStructLightSensor.Pin = ARD_A0_Pin;
@@ -172,22 +182,22 @@ static void MX_GPIO_Init(void) {
 	Config.SingleDiff   = ADC_SINGLE_ENDED;
 	Config.OffsetNumber = ADC_OFFSET_NONE;
 	Config.Offset       = 0;
-	HAL_ADC_ConfigChannel(&ADC_HandlerLightSensor, &Config);
+	HAL_ADC_ConfigChannel(&ADC_HandlerLightSensor, &Config); */
 
-
-	// I2C
+	/* --- I2C1 GPIO ---
+	 * ARD_D15_Pin GPIO_PIN_8 // PB8 -> I2C1_SCL
+	 * ARD_D15_GPIO_Port GPIOB
+	 * ARD_D14_Pin GPIO_PIN_9 // PB9 -> I2C1_SDA
+	 * ARD_D14_GPIO_Port GPIOB */
 	__HAL_RCC_I2C1_CLK_ENABLE();
 	GPIO_InitTypeDef GPIO_InitStructI2C1 = {0};
-
-	// PB8 -> I2C1_SCL, PB9 -> I2C1_SDA
 	GPIO_InitStructI2C1.Pin       = ARD_D15_Pin | ARD_D14_Pin;
 	GPIO_InitStructI2C1.Mode      = GPIO_MODE_AF_OD;          // open-drain for I2C
 	GPIO_InitStructI2C1.Pull      = GPIO_PULLUP;              // needs pull-ups
 	GPIO_InitStructI2C1.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
 	GPIO_InitStructI2C1.Alternate = GPIO_AF4_I2C1;            // AF4 on L4
 	HAL_GPIO_Init(ARD_D14_GPIO_Port, &GPIO_InitStructI2C1);
-
-
+	/* --- I2C1 Config --- */
 	hi2c1.Instance = I2C1;
 	hi2c1.Init.Timing = 0x00320F13; // TIMINGR = (PRESC<<28) | (SCLDEL<<20) | (SDADEL<<16) | (SCLH<<8) | SCLL
 	hi2c1.Init.OwnAddress1 = 0;
@@ -198,21 +208,80 @@ static void MX_GPIO_Init(void) {
 	hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE; // Master sends a signal to all I2C devices
 	hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE; // Disabling so slow slave to hold the clock line low to extend the clock pulse duration, giving it more time to process data.
 	HAL_I2C_Init(&hi2c1);
+
+	/* --- I2C2 GPIO ---
+	 * INTERNAL_I2C2_SCL_Pin GPIO_PIN_10
+	 * INTERNAL_I2C2_SCL_GPIO_Port GPIOB
+	 * INTERNAL_I2C2_SDA_Pin GPIO_PIN_11
+	 * INTERNAL_I2C2_SDA_GPIO_Port GPIOB */
+	__HAL_RCC_I2C2_CLK_ENABLE();
+	GPIO_InitTypeDef GPIO_InitStructI2C2 = {0};
+	GPIO_InitStructI2C2.Pin       = INTERNAL_I2C2_SCL_Pin | INTERNAL_I2C2_SDA_Pin;
+	GPIO_InitStructI2C2.Mode      = GPIO_MODE_AF_OD;          // open-drain for I2C
+	GPIO_InitStructI2C2.Pull      = GPIO_PULLUP;              // needs pull-ups
+	GPIO_InitStructI2C2.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
+	GPIO_InitStructI2C2.Alternate = GPIO_AF4_I2C2;            // AF4 on L4
+	HAL_GPIO_Init(INTERNAL_I2C2_SCL_GPIO_Port, &GPIO_InitStructI2C2);
+	/* --- I2C2 Config --- */
+	hi2c2.Instance = I2C2;
+	hi2c2.Init.Timing = 0x00320F13; // TIMINGR = (PRESC<<28) | (SCLDEL<<20) | (SDADEL<<16) | (SCLH<<8) | SCLL
+	hi2c2.Init.OwnAddress1 = 0;
+	hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+	hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+	hi2c2.Init.OwnAddress2 = 0;
+	hi2c2.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+	hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE; // Master sends a signal to all I2C devices
+	hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE; // Disabling so slow slave to hold the clock line low to extend the clock pulse duration, giving it more time to process data.
+	HAL_I2C_Init(&hi2c2);
+
+	/* --- NFC GPO pin (interrupt from ST25DV) ---
+	 * ST25DV04K_GPO_Pin GPIO_PIN_4
+	 * ST25DV04K_GPO_GPIO_Port GPIOE*/
+	GPIO_InitTypeDef GPIO_InitStructGPO = {0};
+	GPIO_InitStructGPO.Pin = ST25DV04K_GPO_Pin;
+	GPIO_InitStructGPO.Mode = GPIO_MODE_IT_FALLING;   // GPO often active-low pulses
+	GPIO_InitStructGPO.Pull = GPIO_PULLUP;            // depends on board; pull-up is usually correct
+	HAL_GPIO_Init(ST25DV04K_GPO_GPIO_Port, &GPIO_InitStructGPO);
+
+	/* --- NVIC EXTI Interrupt --- */
+	//__HAL_GPIO_EXTI_CLEAR_IT(BUTTON_EXTI13_Pin);
+	//__HAL_GPIO_EXTI_CLEAR_IT(ST25DV04K_GPO_Pin);
+	// Enable NVIC EXTI line 0 - 15
+	HAL_NVIC_SetPriority(BUTTON_EXTI13_EXTI_IRQn, 2, 0);
+	HAL_NVIC_EnableIRQ(BUTTON_EXTI13_EXTI_IRQn);
+	HAL_NVIC_SetPriority(EXTI4_IRQn, 1, 0);
+	HAL_NVIC_EnableIRQ(EXTI4_IRQn);
+
+	// GPO Interrupt
+//	ST25DV_ITStatus_Dyn it;
+//	ST25DV_GPOConfig cfg = {0};
+//	cfg.RFUserDetect = 1;      // or RFFieldChange / MailboxMsg, depending on your header
+//	ST25DV_WriteGPOConfig(&NfcTagObj, &cfg);
 }
 
+void EXTI4_IRQHandler(void) {
+    HAL_GPIO_EXTI_IRQHandler(ST25DV04K_GPO_Pin);
+}
+
+
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-	if (GPIO_Pin == LSM6DSL_INT1_EXTI11_Pin) {
-		while(1) {
-			continue;
-		}
+	if (GPIO_Pin == ST25DV04K_GPO_Pin) {
+		uint32_t now = HAL_GetTick();
+		if (now - g_nfc_last_irq_ms < 100) return;   // debounce
+		g_nfc_last_irq_ms = now;
+
+		uint8_t dyn = 0;
+		if (BSP_NFCTAG_ReadITSTStatus_Dyn(0, &dyn) != NFCTAG_OK) return; // <-- READ IT STATUS (clears)
+
+		g_nfc_it_flags |= dyn;                      // pass bits to main loop
+
+		if (dyn & NFCTAG_IT_FIELDRISING)  g_nfc_rf_state = 1; // RF ON
+		if (dyn & NFCTAG_IT_FIELDFALLING) g_nfc_rf_state = 0; // RF OFF
 	}
 
-	if(GPIO_Pin == BUTTON_EXTI13_Pin) {
-		char message_print[32];
 
-		char message[] = "Blue button is pressed\r\n"; // Fixed message
-		sprintf(message_print, "%s", message);
-		HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+	if(GPIO_Pin == BUTTON_EXTI13_Pin) {
+	    HAL_UART_Transmit(&huart1, (uint8_t*)"Blue button is pressed\r\n", sizeof("Blue button is pressed\r\n") - 1, 100);
 
 		if (buttonActive == false) {
 			buttonActive = true;
@@ -227,17 +296,32 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 
 		if (nearbyFlag) {
 			if (isPlayer) {
-				char message[] = "Player escaped, good job!\r\n"; // Fixed message
-				sprintf(message_print, "%s", message);
-				HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+			    HAL_UART_Transmit(&huart1, (uint8_t*)"Player escaped, good job!\r\n", sizeof("Player escaped, good job!\r\n") - 1, 100);
 			} else {
-				char message[] = "Player captured, good job!\r\n"; // Fixed message
-				sprintf(message_print, "%s", message);
-				HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+			    HAL_UART_Transmit(&huart1, (uint8_t*)"Player captured, good job!\r\n", sizeof("Player captured, good job!\r\n") - 1, 100);
 			}
 			nearbyFlag = false;
 		}
 	}
+}
+
+static void I2C_Scan(I2C_HandleTypeDef *hi2c, const char *tag) {
+  char m[64];
+  int n = sprintf(m, "\r\n--- %s ---\r\n", tag);
+  HAL_UART_Transmit(&huart1,(uint8_t*)m,n,0xFFFF);
+  for (uint8_t a=1; a<0x7F; a++) {
+    if (HAL_I2C_IsDeviceReady(hi2c, a<<1, 2, 5)==HAL_OK) {
+      n = sprintf(m, "I2C ACK @ 0x%02X\r\n", a);
+      HAL_UART_Transmit(&huart1,(uint8_t*)m,n,0xFFFF);
+    }
+  }
+}
+
+void rf_poll_debug(void) {
+    uint8_t rf_on = 0;
+    if (BSP_NFCTAG_GetRFField_Dyn(0, &rf_on) == NFCTAG_OK) {
+        if (rf_on) HAL_UART_Transmit(&huart1,(uint8_t*)"RF=ON\r\n",7,100);
+    }
 }
 
 // Helper Methods
@@ -355,10 +439,8 @@ float MagnetometerHelper(float* buffer) {
 }
 
 void EnforcerOutput(void) {
-	char message_print[16];
-	char message[] = "Player Out!\r\n";
-	sprintf(message_print, "%s", message);
-	HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+    HAL_UART_Transmit(&huart1, (uint8_t*)"Player Out!\r\n", sizeof("Player Out!\r\n") - 1, 100);
+
 }
 
 void LEDBlinkHelper(int modulo) {
@@ -375,14 +457,7 @@ uint16_t ReadLightSensorRaw(void) {
     return val; // 0..4095 for 12-bit
 }
 
-bool isLightSensor(void) {
-	if (HAL_GPIO_ReadPin(ARD_A0_GPIO_Port, ARD_A0_Pin)) {
-		return true;
-	}
-	return false;
-}
-
-void I2C_Write_Example(void) {
+void OLED_ON(void) {
     uint8_t buf[] = {0x00, 0xAF};
     HAL_I2C_Master_Transmit(&hi2c1, SSD1308_ADDR, buf, sizeof(buf), 100 /*ms timeout*/);
 }
@@ -556,11 +631,11 @@ static HAL_StatusTypeDef oled_flush_full(void) {
 }
 void demo_text() {
     fb_clear();
-//    fb_draw_text(0, 0, "HELLO WORLD");
-//    fb_draw_text(0, 8, "T E S T TEST TTT");
-//    fb_draw_text(0, 16, "1.2:3.4:5.6:7.8:9");
-//    fb_draw_text(0, 24, "SUCK MY BALLS");
-//    fb_draw_text(0, 32, "JIA DE");
+    fb_draw_text(0, 0, "HELLO WORLD");
+    fb_draw_text(0, 8, "T E S T TEST TTT");
+    fb_draw_text(0, 16, "1.2:3.4:5.6:7.8:9");
+    fb_draw_text(0, 24, "SUCK MY BALLS");
+    fb_draw_text(0, 32, "JIA DE");
     oled_flush_full();
 }
 
@@ -610,7 +685,6 @@ static inline HAL_StatusTypeDef HT16K33_WriteRows8(const uint8_t rows[8])
     }
     return HAL_I2C_Master_Transmit(&hi2c1, HT16K33_ADDR, buf, sizeof(buf), HAL_MAX_DELAY);
 }
-
 
 
 
@@ -712,7 +786,7 @@ void RedLightGreenLight_update(void) {
 			AccelerometerHelper(accelData);
 			GyroscopeHelper(gyroData);
 
-			for (int i; i<4; i++) {
+			for (int i = 0; i<4; i++) {
 				lastGyro[i] = gyroData[i];
 				lastAccel[i] = accelData[i];
 			}
@@ -869,16 +943,17 @@ void toggleState(void) {
 }
 
 void endState(void) {
-	char message_print[16];
-	char message[] = "Game Over\r\n";
-	sprintf(message_print, "%s", message);
-	HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+	HAL_UART_Transmit(&huart1, (uint8_t*)"Game Over\r\n", sizeof("Game Over\r\n") - 1, 100);
 	programRunning = false;
 }
 
 
-
 void setup(void) {
+	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+	HAL_Init();
+	MX_GPIO_Init(); // GPIO Pins
+	/* UART initialization */
+	UART1_Init();
 	// initialise_monitor_handles(); // for semi-hosting support (printf)
 
 	/* Peripheral initializations using BSP functions */
@@ -888,21 +963,35 @@ void setup(void) {
 	BSP_ACCELERO_Init();
 	BSP_GYRO_Init();
 	BSP_MAGNETO_Init();
+	if (BSP_NFCTAG_Init(0) != NFCTAG_OK) {
+	    HAL_UART_Transmit(&huart1, (uint8_t*)"NFC Init Failed\r\n", sizeof("NFC Init Failed\r\n") - 1, 100);
+	} else {
+	    HAL_UART_Transmit(&huart1, (uint8_t*)"NFC Init OK\r\n", sizeof("NFC Init OK\r\n") - 1, 100);
+	}
 
-	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-	HAL_Init();
+	ST25DV_PASSWD pwd = { .MsbPasswd = 0, .LsbPasswd = 0 };
+	(void)BSP_NFCTAG_PresentI2CPassword(0, pwd);   // required for static writes
 
-	// GPIO Pins
-	MX_GPIO_Init();
-	SENSOR_IO_Write(0xD4, 0x0D, 0x03);
+	// 1) Set GPO pulse width (pick an enum your header defines)
+	(void)BSP_NFCTAG_WriteITPulse(0, (ST25DV_PULSE_DURATION)2);
 
-	/* UART initialization */
-	UART1_Init();
+	// 2) Enable only the RF field events you want on GPO
+	uint16_t itmask = 0;
+	itmask |= NFCTAG_IT_FIELDRISING;   // RF ON
+	itmask |= NFCTAG_IT_FIELDFALLING;  // RF OFF (optional)
+	(void)BSP_NFCTAG_ConfigIT(0, itmask);
 
-	I2C_Write_Example(); // on screen
+	// 3) Make sure dynamic GPO is enabled
+	(void)BSP_NFCTAG_SetGPO_en_Dyn(0);
+
+	// 4) Clear any stale flags so the first pulse comes clean
+	uint16_t dummy; (void)BSP_NFCTAG_GetITStatus(0, &dummy);
+	uint8_t  dyn;   (void)BSP_NFCTAG_ReadITSTStatus_Dyn(0, &dyn);
+
+
+	OLED_ON(); // on screen
 	oled_clear();
 	demo_text();
-
 
 	// LED MATRIX
 	HT16K33_Init(15, 0);
@@ -916,9 +1005,9 @@ void setup(void) {
 	        0b01000000,
 	        0b10000000,
 	};
+	HT16K33_WriteRows8(frame); // LED MATRIX
 
-	HT16K33_WriteRows8(frame);
-
+	// SENSOR_IO_Write(0xD4, 0x0D, 0x03); // gyro
 
 	// My state machine
 	currentState = &RedLightGreenLightState;
@@ -926,11 +1015,29 @@ void setup(void) {
 }
 
 
+
+static void nfc_service(void)
+{
+    uint32_t it = g_nfc_it_flags;
+    if (!it) return;
+    g_nfc_it_flags = 0;
+
+    if (it & NFCTAG_IT_FIELDRISING) {
+        uint32_t now = HAL_GetTick();
+        if (now - g_nfc_last_report_ms >= 1000) { // 1 s rate-limit
+            const char *msg = "RF field ON (phone near)\r\n";
+            HAL_UART_Transmit(&huart1, (uint8_t*)msg, (uint16_t)strlen(msg), 100);
+            g_nfc_last_report_ms = now;
+        }
+    }
+}
+
 // Main Program Code
 int main(void) {
 	setup();
 
   	while (programRunning) {
+  		nfc_service();
   		currentState->update();
 	}
 }
