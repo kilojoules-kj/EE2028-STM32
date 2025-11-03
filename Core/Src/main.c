@@ -40,7 +40,11 @@ static ADC_HandleTypeDef ADC_HandlerLightSensor;
 #define SSD1308_ADDR (0x3C << 1) // 0x3C is 7bits but HAL expects 8bits
 static I2C_HandleTypeDef hi2c1;
 #define I2C_SPEED_HZ 4000000  // The same as System Clock
-#define PCLK1_FREQ_HZ 4000000  //
+#define PCLK1_FREQ_HZ 4000000
+
+#define HT16K33_ADDR (0x70 << 1) // LED MATRIX
+
+#define GROVE5_ADDR (0x03 << 1) // 5-Way Switch
 
 int BUTTON_DURATION = 600; // 600 tick/ms for GetTick()
 static bool buttonActive = false;
@@ -182,6 +186,7 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStructI2C1.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
 	GPIO_InitStructI2C1.Alternate = GPIO_AF4_I2C1;            // AF4 on L4
 	HAL_GPIO_Init(ARD_D14_GPIO_Port, &GPIO_InitStructI2C1);
+
 
 	hi2c1.Instance = I2C1;
 	hi2c1.Init.Timing = 0x00320F13; // TIMINGR = (PRESC<<28) | (SCLDEL<<20) | (SDADEL<<16) | (SCLH<<8) | SCLL
@@ -551,13 +556,65 @@ static HAL_StatusTypeDef oled_flush_full(void) {
 }
 void demo_text() {
     fb_clear();
-    fb_draw_text(0, 0, "HELLO WORLD");
-    fb_draw_text(0, 8, "T E S T TEST TTT");
-    fb_draw_text(0, 16, "1.2:3.4:5.6:7.8:9");
-    fb_draw_text(0, 24, "SUCK MY BALLS");
-    fb_draw_text(0, 32, "JIA DE");
+//    fb_draw_text(0, 0, "HELLO WORLD");
+//    fb_draw_text(0, 8, "T E S T TEST TTT");
+//    fb_draw_text(0, 16, "1.2:3.4:5.6:7.8:9");
+//    fb_draw_text(0, 24, "SUCK MY BALLS");
+//    fb_draw_text(0, 32, "JIA DE");
     oled_flush_full();
 }
+
+
+#define HT16K33_CMD_OSC_ON  0x21
+#define HT16K33_CMD_DISPLAY 0x80          // + blink rate << 1 | display on
+#define HT16K33_DISPLAY_ON  0x01
+#define HT16K33_CMD_DIM     0xE0          // + brightness (0-15)
+
+static inline void HT16K33_Init(uint8_t brightness /* 0..15 */, uint8_t blink /* 0..3 */)
+{
+    uint8_t cmd;
+
+    cmd = HT16K33_CMD_OSC_ON;
+    HAL_I2C_Master_Transmit(&hi2c1, HT16K33_ADDR, &cmd, 1, HAL_MAX_DELAY);
+
+    cmd = HT16K33_CMD_DISPLAY | (blink << 1) | HT16K33_DISPLAY_ON;
+    HAL_I2C_Master_Transmit(&hi2c1, HT16K33_ADDR, &cmd, 1, HAL_MAX_DELAY);
+
+    cmd = HT16K33_CMD_DIM | (brightness & 0x0F);
+    HAL_I2C_Master_Transmit(&hi2c1, HT16K33_ADDR, &cmd, 1, HAL_MAX_DELAY);
+}
+
+// Write an 8x8 frame using 16-bit rows (LSB sent first for each row).
+// rows[0] is first row; bit0 = column 0. Only low 8 bits are used by mono 8x8.
+static inline HAL_StatusTypeDef HT16K33_WriteRows16(const uint16_t rows[8])
+{
+    uint8_t buf[1 + 16];
+    buf[0] = 0x00; // start at display RAM address 0x00
+
+    for (uint8_t r = 0; r < 8; r++) {
+        buf[1 + (r * 2) + 0] = (uint8_t)(rows[r] & 0xFF);
+        buf[1 + (r * 2) + 1] = (uint8_t)((rows[r] >> 8) & 0xFF);
+    }
+    return HAL_I2C_Master_Transmit(&hi2c1, HT16K33_ADDR, buf, sizeof(buf), HAL_MAX_DELAY);
+}
+
+// Convenience: write using 8-bit rows (mono 8x8). Each byte is a row bitmap.
+static inline HAL_StatusTypeDef HT16K33_WriteRows8(const uint8_t rows[8])
+{
+    uint8_t buf[1 + 16];
+    buf[0] = 0x00; // start at display RAM address 0x00
+
+    for (uint8_t r = 0; r < 8; r++) {
+        buf[1 + (r * 2) + 0] = rows[r];  // low byte (columns 0..7)
+        buf[1 + (r * 2) + 1] = 0x00;     // high byte (columns 8..15 unused)
+    }
+    return HAL_I2C_Master_Transmit(&hi2c1, HT16K33_ADDR, buf, sizeof(buf), HAL_MAX_DELAY);
+}
+
+
+
+
+
 
 // Custom Class for Switching
 typedef struct {
@@ -820,6 +877,7 @@ void endState(void) {
 }
 
 
+
 void setup(void) {
 	// initialise_monitor_handles(); // for semi-hosting support (printf)
 
@@ -845,6 +903,23 @@ void setup(void) {
 	oled_clear();
 	demo_text();
 
+
+	// LED MATRIX
+	HT16K33_Init(15, 0);
+	uint8_t frame[8] = {
+	        0b00000000,
+	        0b00000010,
+	        0b00000100,
+	        0b00001000,
+	        0b00010000,
+	        0b00100000,
+	        0b01000000,
+	        0b10000000,
+	};
+
+	HT16K33_WriteRows8(frame);
+
+
 	// My state machine
 	currentState = &RedLightGreenLightState;
 	currentState->initialise();
@@ -856,6 +931,6 @@ int main(void) {
 	setup();
 
   	while (programRunning) {
-		currentState->update();
+  		currentState->update();
 	}
 }
