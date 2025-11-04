@@ -247,22 +247,11 @@ static void MX_GPIO_Init(void) {
 	//__HAL_GPIO_EXTI_CLEAR_IT(BUTTON_EXTI13_Pin);
 	//__HAL_GPIO_EXTI_CLEAR_IT(ST25DV04K_GPO_Pin);
 	// Enable NVIC EXTI line 0 - 15
-	HAL_NVIC_SetPriority(BUTTON_EXTI13_EXTI_IRQn, 2, 0);
-	HAL_NVIC_EnableIRQ(BUTTON_EXTI13_EXTI_IRQn);
+	HAL_NVIC_SetPriority(EXTI15_10_IRQn, 2, 0);
+	HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 	HAL_NVIC_SetPriority(EXTI4_IRQn, 1, 0);
 	HAL_NVIC_EnableIRQ(EXTI4_IRQn);
-
-	// GPO Interrupt
-//	ST25DV_ITStatus_Dyn it;
-//	ST25DV_GPOConfig cfg = {0};
-//	cfg.RFUserDetect = 1;      // or RFFieldChange / MailboxMsg, depending on your header
-//	ST25DV_WriteGPOConfig(&NfcTagObj, &cfg);
 }
-
-void EXTI4_IRQHandler(void) {
-    HAL_GPIO_EXTI_IRQHandler(ST25DV04K_GPO_Pin);
-}
-
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == ST25DV04K_GPO_Pin) {
@@ -440,7 +429,6 @@ float MagnetometerHelper(float* buffer) {
 
 void EnforcerOutput(void) {
     HAL_UART_Transmit(&huart1, (uint8_t*)"Player Out!\r\n", sizeof("Player Out!\r\n") - 1, 100);
-
 }
 
 void LEDBlinkHelper(int modulo) {
@@ -698,6 +686,12 @@ typedef struct {
 	void (*exit)(void);
 } State;
 
+void StartState_initialise();
+void StartState_update();
+void StartState_exit();
+void EndState_initialise();
+void EndState_update();
+void EndState_exit();
 void RedLightGreenLight_initialise(void);
 void RedLightGreenLight_update(void);
 void RedLightGreenLight_exit(void);
@@ -705,21 +699,36 @@ void CatchAndRun_initialise(void);
 void CatchAndRun_update(void);
 void CatchAndRun_exit(void);
 
+void StartState_initialise() {
+    HAL_UART_Transmit(&huart1, (uint8_t*)"Welcome\r\n", sizeof("Welcome\r\n") - 1, 100);
+}
+void StartState_update() {
+	// check if NFC
+	if (g_nfc_it_flags != 0) {
+		toggleState();
+	}
+}
+void StartState_exit() {
+    HAL_UART_Transmit(&huart1, (uint8_t*)"Welcome\r\n", sizeof("Welcome\r\n") - 1, 100);
+}
+void EndState_initialise() {
+	HAL_UART_Transmit(&huart1, (uint8_t*)"Game Over\r\n", sizeof("Game Over\r\n") - 1, 100);
+}
+void EndState_update() {
+	// check if NFC3
+	}
+void EndState_exit() {
+	HAL_UART_Transmit(&huart1, (uint8_t*)"Game Over\r\n", sizeof("Game Over\r\n") - 1, 100);
+	programRunning = false;
+}
 // Implementation for RedLightGreenLight State
 void RedLightGreenLight_initialise(void) {
 	if (isPlayer) {
-		char message[] = "Entering Red Light, Green Light as Player\r\n"; // Fixed message
-
-		char message_print[64];
-		sprintf(message_print, "%s", message);
-		HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
-
+	    HAL_UART_Transmit(&huart1, (uint8_t*)"Entering Red Light, Green Light as Player\r\n",
+	    		sizeof("Entering Red Light, Green Light as Player\r\n") - 1, 100);
 	} else {
-		char message[] = "Entering Red Light, Green Light as Enforcer\r\n"; // Fixed message
-
-		char message_print[64];
-		sprintf(message_print, "%s", message);
-		HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+	    HAL_UART_Transmit(&huart1, (uint8_t*)"Entering Red Light, Green Light as Enforcer\r\n",
+	    		sizeof("Entering Red Light, Green Light as Enforcer\r\n") - 1, 100);
 	}
 }
 void RedLightGreenLight_update(void) {
@@ -931,7 +940,10 @@ State CatchAndRunState = {
 volatile bool programRunning = true;
 
 void toggleState(void) {
-	if (currentState == &RedLightGreenLightState) {
+	if (currentState == &StartState) {
+		currentState->exit();
+		currentState = &RedLightGreenLightState;
+	} else if (currentState == &RedLightGreenLightState) {
 		currentState->exit();
 		currentState = &CatchAndRunState;
 	} else if (currentState == &CatchAndRunState) {
