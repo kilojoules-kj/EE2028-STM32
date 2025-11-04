@@ -952,6 +952,12 @@ State EndState = {
     .update = End_update,
     .exit = End_exit
 };
+State RedLightGreenLightState = {
+    .name = "RedLightGreenLight",
+    .initialise = RedLightGreenLight_initialise,
+    .update = RedLightGreenLight_update,
+    .exit = RedLightGreenLight_exit
+};
 State CatchAndRunState = {
     .name = "CatchAndRun",
     .initialise = CatchAndRun_initialise,
