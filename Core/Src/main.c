@@ -7,6 +7,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "led_matrix.h"
 // Peripherals
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_tsensor.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_psensor.h"
@@ -678,9 +679,6 @@ static inline HAL_StatusTypeDef HT16K33_WriteRows8(const uint8_t rows[8])
 }
 
 
-
-
-
 // Custom Class for Switching
 typedef struct {
 	const char *name;
@@ -717,7 +715,7 @@ void End_initialise() {
 	programRunning = false;
 }
 void End_update() {
-	// check if NFC3
+	// check if NFC
 	return;
 	}
 void End_exit() {
@@ -734,7 +732,16 @@ void RedLightGreenLight_initialise(void) {
 	}
 }
 void RedLightGreenLight_update(void) {
+    static bool init = false;
 	static bool isGreen = false;
+	uint32_t now = HAL_GetTick();
+	static uint32_t next_ms;
+	static int countdown = 9;        // start at 9
+
+	if (!init) {
+		init = true;
+		next_ms = now + 1000U;    // start 1s from now
+	}
 
 	// timing shit
 	static uint32_t lastToggle = 0;
@@ -764,8 +771,13 @@ void RedLightGreenLight_update(void) {
 		HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
 	}
 
-
 	if (isGreen) {
+		if ((int32_t)(HAL_GetTick() - next_ms) >= 0) {   // time reached (handles wrap)
+			next_ms += 1000U;
+			HT16K33_WriteRows8(led_matrix_frame(countdown, LED_SHAPE_GREEN));
+			countdown = (countdown == 0) ? 9 : (countdown - 1);
+		}
+
 		HAL_GPIO_WritePin(ARD_D13_GPIO_Port, ARD_D13_Pin, GPIO_PIN_SET);
 		HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
 		lastCaptured = false;
@@ -776,6 +788,12 @@ void RedLightGreenLight_update(void) {
 			HumiditySensorHelper(true);
 		}
 	} else {
+		if ((int32_t)(HAL_GetTick() - next_ms) >= 0) {
+			next_ms += 1000U;
+			HT16K33_WriteRows8(led_matrix_frame(countdown, LED_SHAPE_RED));
+			countdown = (countdown == 0) ? 9 : (countdown - 1);
+		}
+
 		if (!lastCaptured) {
 			AccelerometerHelper(lastAccel);
 			GyroscopeHelper(lastGyro);
@@ -937,18 +955,6 @@ State CatchAndRunState = {
     .update = CatchAndRun_update,
     .exit = CatchAndRun_exit
 };
-State StartState = {
-    .name = "Start",
-    .initialise = Start_initialise,
-    .update = Start_update,
-    .exit = Start_exit
-};
-State EndState = {
-    .name = "End",
-    .initialise = End_initialise,
-    .update = End_update,
-    .exit = End_exit
-};
 
 void toggleState(void) {
 	if (currentState == &StartState) {
@@ -1018,17 +1024,7 @@ void setup(void) {
 
 	// LED MATRIX
 	HT16K33_Init(15, 0);
-	uint8_t frame[8] = {
-	        0b00000000,
-	        0b00000010,
-	        0b00000100,
-	        0b00001000,
-	        0b00010000,
-	        0b00100000,
-	        0b01000000,
-	        0b10000000,
-	};
-	HT16K33_WriteRows8(frame); // LED MATRIX
+	HT16K33_WriteRows8(led_matrix_frame(-1, LED_SHAPE_NONE)); // clear the LED Matrix
 
 	// SENSOR_IO_Write(0xD4, 0x0D, 0x03); // gyro
 
@@ -1039,13 +1035,12 @@ void setup(void) {
 
 
 
-static void nfc_service(void)
-{
-    uint32_t it = g_nfc_it_flags;
-    if (!it) return;
-    g_nfc_it_flags = 0;
+static void nfc_service(void) {
+	uint32_t it = g_nfc_it_flags;
+	if (!it) return;
+	g_nfc_it_flags = 0;
 
-    if (it & NFCTAG_IT_FIELDRISING) {
+    if (g_nfc_it_flags & NFCTAG_IT_FIELDRISING) {
         uint32_t now = HAL_GetTick();
         if (now - g_nfc_last_report_ms >= 1000) { // 1 s rate-limit
             const char *msg = "RF field ON (phone near)\r\n";
