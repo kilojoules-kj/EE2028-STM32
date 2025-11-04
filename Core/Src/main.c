@@ -61,7 +61,6 @@ volatile uint32_t g_nfc_it_flags = 0;
 volatile uint32_t g_nfc_last_irq_ms = 0;
 volatile uint8_t  g_nfc_rf_state = 0;      // 0=OFF, 1=ON
 static   uint32_t g_nfc_last_report_ms = 0; // for UART throttle
-float accelData[4], gyroData[4];
 
 // Running flag
 volatile bool programRunning = true;
@@ -549,38 +548,21 @@ static const uint8_t font5x7[][5] = {
     {0x63,0x14,0x08,0x14,0x63}, // 'X'
     {0x07,0x08,0x70,0x08,0x07}, // 'Y'
     {0x61,0x51,0x49,0x45,0x43}, // 'Z'
-    // '-' '.' ':' '^' '/'
-	{0x08,0x08,0x08,0x08,0x08}, // '-'
-	{0x00,0x60,0x60,0x00,0x00}, // '.'
-	{0x00,0x36,0x36,0x00,0x00}, // ':'
-	{0x04,0x02,0x01,0x02,0x04}, // '^'
-	{0x20,0x10,0x08,0x04,0x02}, // '/'
-	{0x06,0x09,0x09,0x06,0x00}, // '°'
-	{0x61,0x12,0x08,0x24,0x43}, // '%'
-	{0x24,0x52,0x4A,0x24,0x50}, // '&'
-
+    // '-' '.' ':'
+    {0x08,0x08,0x08,0x08,0x08}, // '-'
+    {0x00,0x60,0x60,0x00,0x00}, // '.'
+    {0x00,0x36,0x36,0x00,0x00}, // ':'
 };
-
 static inline const uint8_t* glyph_for(char c) {
     if (c == ' ') return font5x7[0];
     if (c >= '0' && c <= '9') return font5x7[1 + (c - '0')];
     if (c >= 'A' && c <= 'Z') return font5x7[11 + (c - 'A')];
-
-    int puncBase = 11 + 26;  // index of '-'
-
-    if (c == '-') return font5x7[puncBase + 0];
-    if (c == '.') return font5x7[puncBase + 1];
-    if (c == ':') return font5x7[puncBase + 2];
-    if (c == '^') return font5x7[puncBase + 3];
-    if (c == '/') return font5x7[puncBase + 4];
-    if ((unsigned char)c == 0xB0) return font5x7[puncBase + 5]; // '°'
-    if (c == '%') return font5x7[puncBase + 6];
-    if (c == '&') return font5x7[puncBase + 7];
-
+    if (c == '-') return font5x7[11 + 26];
+    if (c == '.') return font5x7[11 + 27];
+    if (c == ':') return font5x7[11 + 28];
     // Fallback: blank
     return font5x7[0];
 }
-
 static void fb_set_pixel(int x, int y, int on) {
     if (x < 0 || x >= SSD1308_WIDTH || y < 0 || y >= SSD1308_HEIGHT) return;
     int page = y >> 3;
@@ -640,90 +622,13 @@ static HAL_StatusTypeDef oled_flush_full(void) {
     }
     return HAL_OK;
 }
-
-// Game 1: Red Light / Green Light
-static void OLED_Show_RLGL(bool isGreen, bool isPlayer, float accelMag, float gyroMag) {
-	char line[32];
-
-	fb_clear();
-    // ----- Header (centered) -----
-	fb_draw_text(0,  0, "--------------------"); // top line
-    fb_draw_text(16, 8, "GAME 1 : RLGL");        // title
-    fb_draw_text(0,  16, "--------------------"); // bottom line
-    // ----- Role & Phase -----
-    sprintf(line, "ROLE : %s", isPlayer ? "PLAYER" : "ENFORCER");
-    fb_draw_text(0, 24, line);
-
-    sprintf(line, "PHASE: %s", isGreen ? "GREEN" : "RED");
-    fb_draw_text(0, 32, line);
-
-    if (isGreen) {
-		// ----- Show environment in GREEN phase -----
-		sprintf(line, "TEM : %4.1f \xB0""C", TemperatureSensorHelper(true));
-		fb_draw_text(0, 40, line);
-
-        sprintf(line, "HUM : %4.1f %%", HumiditySensorHelper(true));
-        fb_draw_text(0, 48, line);
-
-		sprintf(line, "PRE : %5.1f HPA", PressureSensorHelper(true));
-		fb_draw_text(0, 56, line);
-
-
-    } else {
-        // ----- Show motion in RED phase -----
-        sprintf(line, "ACC  : %4.1f M/S^2", accelMag);
-        fb_draw_text(0, 40, line);
-
-        sprintf(line, "GYRO : %4.1f DEG/SEC", gyroMag);
-        fb_draw_text(0, 48, line);
-    }
-
-    oled_flush_full();
-}
-
-// Game 2: Catch & Run
-static void OLED_Show_CatchRun(bool isPlayer, float magField) {
-	char line[32];
-
-	fb_clear();
-
-    // thresholds (adjust as needed)
-    const float MAG_VERY_NEAR = 600.0f;
-    const float MAG_NEAR      = 400.0f;
-
-    // ----- Header -----
-    fb_draw_text(0,  0, "---------------------");
-    fb_draw_text(6,  8, "GAME 2 : CATCH & RUN");
-    fb_draw_text(0, 16, "---------------------");
-
-    // ----- Role -----
-    sprintf(line, "ROLE : %s", isPlayer ? "PLAYER" : "ENFORCER");
-    fb_draw_text(0, 24, line);
-
-    // ----- Proximity status -----
-    const char *status;
-    if (magField > MAG_VERY_NEAR) {
-        status = "VERY NEAR";
-    } else if (magField > MAG_NEAR) {
-        status = "NEAR";
-    } else {
-        status = "FAR";
-    }
-
-    sprintf(line, "STATUS: %s", status);
-    fb_draw_text(0, 32, line);
-
-    // ----- Magnetometer magnitude -----
-    sprintf(line, "MAG: %4.1f T", magField);
-    fb_draw_text(0, 40, line);
-
-    // ----- Environment (2 lines) -----
-    sprintf(line, "TEM: %4.1f\xB0""C HUM: %3.0f%%", TemperatureSensorHelper(true), HumiditySensorHelper(true));
-    fb_draw_text(0, 48, line);
-
-    sprintf(line, "PRE: %5.1f hPa", PressureSensorHelper(true));
-    fb_draw_text(0, 56, line);
-
+void demo_text() {
+    fb_clear();
+    fb_draw_text(0, 0, "HELLO WORLD");
+    fb_draw_text(0, 8, "T E S T TEST TTT");
+    fb_draw_text(0, 16, "1.2:3.4:5.6:7.8:9");
+    fb_draw_text(0, 24, "SUCK MY BALLS");
+    fb_draw_text(0, 32, "JIA DE");
     oled_flush_full();
 }
 
@@ -898,9 +803,6 @@ void RedLightGreenLight_update(void) {
 			TemperatureSensorHelper(true);
 			PressureSensorHelper(true);
 			HumiditySensorHelper(true);
-
-			 // Show simple RLGL screen (no movement yet)
-			OLED_Show_RLGL(true, isPlayer,0.0f, 0.0f);
 		}
 	} else {
 		if ((int32_t)(HAL_GetTick() - next_ms) >= 0) {
@@ -922,21 +824,13 @@ void RedLightGreenLight_update(void) {
 		    lastLEDToggle = HAL_GetTick();
 		}
 
-
-		// Red Light
-
-
 		if (HAL_GetTick() % 2000 < 10) {
 			float accelThreshold = 0.8f; // m/s², mild movement
 			float gyroThreshold  = 1.5f; // deg/s, mild rotation -> this sensor noise is way too high
 
-
+			float accelData[4], gyroData[4];
 			AccelerometerHelper(accelData);
 			GyroscopeHelper(gyroData);
-
-			// NEW: update OLED with magnitudes (index 3)
-			OLED_Show_RLGL(false, isPlayer,accelData[3], gyroData[3]);
-
 
 			for (int i = 0; i<4; i++) {
 				lastGyro[i] = gyroData[i];
@@ -1009,9 +903,6 @@ void CatchAndRun_update(void) {
 	float magnetData[4];
 	MagnetometerHelper(magnetData); // constant continuous
 	float magnetoThreshold = 400.0f;
-
-	// NEW: show Catch & Run info every loop
-	OLED_Show_CatchRun(isPlayer, magnetData[3]);
 
 	if (isPlayer && magnetData[3] > magnetoThreshold) {
 		if (nearbyFlag == false) {
@@ -1144,9 +1035,8 @@ void setup(void) {
 	uint8_t  dyn;   (void)BSP_NFCTAG_ReadITSTStatus_Dyn(0, &dyn);
 
 	OLED_ON(); // on screen
-	oled_clear();           // blank screen at start
-	// Show initial Game 1 screen:
-	OLED_Show_RLGL(false, isPlayer,0.0f, 0.0f);
+	oled_clear();
+	demo_text();
 
 	// LED MATRIX
 	HT16K33_Init(15, 0);
