@@ -235,5 +235,7 @@ void EXTI15_10_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
-
+void EXTI4_IRQHandler(void) {
+    HAL_GPIO_EXTI_IRQHandler(ST25DV04K_GPO_Pin);
+}
 /* USER CODE END 1 */
