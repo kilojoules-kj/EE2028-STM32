@@ -721,7 +721,6 @@ void End_update() {
 void End_exit() {
 	HAL_UART_Transmit(&huart1, (uint8_t*)"Game Over\r\n", sizeof("Game Over\r\n") - 1, 100);
 }
-// Implementation for RedLightGreenLight State
 void RedLightGreenLight_initialise(void) {
 	if (isPlayer) {
 	    HAL_UART_Transmit(&huart1, (uint8_t*)"Entering Red Light, Green Light as Player\r\n",
@@ -941,14 +940,18 @@ void CatchAndRun_exit(void) {
 
 // State variable
 State* currentState;         // Pointer
-
-State RedLightGreenLightState = {
-    .name = "RedLightGreenLight",
-    .initialise = RedLightGreenLight_initialise,
-    .update = RedLightGreenLight_update,
-    .exit = RedLightGreenLight_exit
+State StartState = {
+    .name = "Start",
+    .initialise = Start_initialise,
+    .update = Start_update,
+    .exit = Start_exit
 };
-
+State EndState = {
+    .name = "End",
+    .initialise = End_initialise,
+    .update = End_update,
+    .exit = End_exit
+};
 State CatchAndRunState = {
     .name = "CatchAndRun",
     .initialise = CatchAndRun_initialise,
