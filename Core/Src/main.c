@@ -61,6 +61,9 @@ volatile uint32_t g_nfc_last_irq_ms = 0;
 volatile uint8_t  g_nfc_rf_state = 0;      // 0=OFF, 1=ON
 static   uint32_t g_nfc_last_report_ms = 0; // for UART throttle
 
+// Running flag
+volatile bool programRunning = true;
+
 static void UART1_Init(void) {
 	/* Pin configuration for UART. BSP_COM_Init() can do
 	this automatically */
@@ -686,12 +689,12 @@ typedef struct {
 	void (*exit)(void);
 } State;
 
-void StartState_initialise();
-void StartState_update();
-void StartState_exit();
-void EndState_initialise();
-void EndState_update();
-void EndState_exit();
+void Start_initialise();
+void Start_update();
+void Start_exit();
+void End_initialise();
+void End_update();
+void End_exit();
 void RedLightGreenLight_initialise(void);
 void RedLightGreenLight_update(void);
 void RedLightGreenLight_exit(void);
@@ -699,27 +702,26 @@ void CatchAndRun_initialise(void);
 void CatchAndRun_update(void);
 void CatchAndRun_exit(void);
 
-void StartState_initialise() {
+void Start_initialise() {
     HAL_UART_Transmit(&huart1, (uint8_t*)"Welcome\r\n", sizeof("Welcome\r\n") - 1, 100);
 }
-void StartState_update() {
+void Start_update() {
 	// check if NFC
-	if (g_nfc_it_flags != 0) {
-		toggleState();
-	}
+	return;
 }
-void StartState_exit() {
-    HAL_UART_Transmit(&huart1, (uint8_t*)"Welcome\r\n", sizeof("Welcome\r\n") - 1, 100);
+void Start_exit() {
+    HAL_UART_Transmit(&huart1, (uint8_t*)"exit\r\n", sizeof("exit\r\n") - 1, 100);
 }
-void EndState_initialise() {
-	HAL_UART_Transmit(&huart1, (uint8_t*)"Game Over\r\n", sizeof("Game Over\r\n") - 1, 100);
-}
-void EndState_update() {
-	// check if NFC3
-	}
-void EndState_exit() {
+void End_initialise() {
 	HAL_UART_Transmit(&huart1, (uint8_t*)"Game Over\r\n", sizeof("Game Over\r\n") - 1, 100);
 	programRunning = false;
+}
+void End_update() {
+	// check if NFC3
+	return;
+	}
+void End_exit() {
+	HAL_UART_Transmit(&huart1, (uint8_t*)"Game Over\r\n", sizeof("Game Over\r\n") - 1, 100);
 }
 // Implementation for RedLightGreenLight State
 void RedLightGreenLight_initialise(void) {
@@ -921,7 +923,7 @@ void CatchAndRun_exit(void) {
 
 // State variable
 State* currentState;         // Pointer
-// Define the two states
+
 State RedLightGreenLightState = {
     .name = "RedLightGreenLight",
     .initialise = RedLightGreenLight_initialise,
@@ -935,9 +937,18 @@ State CatchAndRunState = {
     .update = CatchAndRun_update,
     .exit = CatchAndRun_exit
 };
-
-// Running flag
-volatile bool programRunning = true;
+State StartState = {
+    .name = "Start",
+    .initialise = Start_initialise,
+    .update = Start_update,
+    .exit = Start_exit
+};
+State EndState = {
+    .name = "End",
+    .initialise = End_initialise,
+    .update = End_update,
+    .exit = End_exit
+};
 
 void toggleState(void) {
 	if (currentState == &StartState) {
