@@ -641,13 +641,21 @@ static HAL_StatusTypeDef oled_flush_full(void) {
 }
 
 // Game 1: Red Light / Green Light
-static void OLED_Show_RLGL(bool isGreen, bool isPlayer, float accelMag, float gyroMag) {
+static void OLED_Show_RLGL(bool isGreen, bool isPlayer, float accelMag, float gyroMag, const char *statusText) {
 	char line[32];
 
 	fb_clear();
     // ----- Header (centered) -----
 	fb_draw_text(0,  0, "--------------------"); // top line
-    fb_draw_text(16, 8, "GAME 1 : RLGL");        // title
+
+    if (statusText && statusText[0] != '\0') {
+        // show GAME OVER / PLAYER OUT! in header
+        fb_draw_text(8, 8, statusText);
+    } else {
+        // normal title
+        fb_draw_text(16, 8, "GAME 1 : RLGL");
+    }
+
     fb_draw_text(0,  16, "--------------------"); // bottom line
     // ----- Role & Phase -----
     sprintf(line, "ROLE : %s", isPlayer ? "PLAYER" : "ENFORCER");
@@ -900,7 +908,7 @@ void RedLightGreenLight_update(void) {
 			HumiditySensorHelper(true);
 
 			// Show simple RLGL screen (no movement yet)
-			OLED_Show_RLGL(true, isPlayer,0.0f, 0.0f);
+			OLED_Show_RLGL(true, isPlayer,0.0f, 0.0f, "");
 		}
 	} else {
 		// Red Light
@@ -926,26 +934,32 @@ void RedLightGreenLight_update(void) {
 
 		if (HAL_GetTick() % 2000 < 10) {
 			float accelThreshold = 0.8f; // m/s², mild movement
-			float gyroThreshold  = 1.5f; // deg/s, mild rotation -> this sensor noise is way too high
+			float gyroThreshold  = 1.5f; // deg/s, mild rotation
 
-
+			float accelData[4], gyroData[4];
 			AccelerometerHelper(accelData);
 			GyroscopeHelper(gyroData);
 
-			// NEW: update OLED with magnitudes (index 3)
-			OLED_Show_RLGL(false, isPlayer,accelData[3], gyroData[3]);
+			// use index 3 as magnitude (as you do in helpers)
+			float accelMag = accelData[3];
+			float gyroMag  = gyroData[3];
 
+			// compare current magnitudes to baseline captured in lastAccel/lastGyro
+			bool moved = (fabs(accelMag - lastAccel[3]) > accelThreshold) ||
+			             (fabs(gyroMag  - lastGyro[3])  > gyroThreshold);
 
-			for (int i = 0; i<4; i++) {
-				lastGyro[i] = gyroData[i];
-				lastAccel[i] = accelData[i];
-			}
-
-			if (isPlayer && (fabs(accelData[3] - lastAccel[3]) > accelThreshold) && (fabs(gyroData[3]  - lastGyro[3]) > gyroThreshold)) {
-				switchEndState();
+			if (moved && isPlayer) {
+				// PLAYER: Game Over, game ends
+				OLED_Show_RLGL(false, true, accelMag, gyroMag, "!!!!GAME OVER!!!!");
+				switchEndState();        // your existing end/game over
 				return;
-			} else if (!isPlayer && (fabs(accelData[3] - lastAccel[3]) > accelThreshold) && (fabs(gyroData[3]  - lastGyro[3]) > gyroThreshold)) {
-				EnforcerOutput();
+			} else if (moved && !isPlayer) {
+				// ENFORCER: Player Out!, game continues
+				OLED_Show_RLGL(false, false, accelMag, gyroMag, "!!!!PLAYER OUT!!!!");
+				EnforcerOutput();        // UART "Player Out!"
+			} else {
+				// no movement: normal RLGL header
+				OLED_Show_RLGL(false, isPlayer, accelMag, gyroMag, "");
 			}
 		}
 	}
@@ -1145,7 +1159,7 @@ void setup(void) {
 	OLED_ON(); // on screen
 	oled_clear();           // blank screen at start
 	// Show initial Game 1 screen:
-	OLED_Show_RLGL(false, isPlayer,0.0f, 0.0f);
+	OLED_Show_RLGL(false, isPlayer,0.0f, 0.0f, "");
 
 	// LED MATRIX
 	HT16K33_Init(15, 0);
