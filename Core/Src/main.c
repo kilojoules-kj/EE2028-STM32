@@ -7,6 +7,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "led_matrix.h"
 // Peripherals
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_tsensor.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_psensor.h"
@@ -60,7 +61,9 @@ volatile uint32_t g_nfc_it_flags = 0;
 volatile uint32_t g_nfc_last_irq_ms = 0;
 volatile uint8_t  g_nfc_rf_state = 0;      // 0=OFF, 1=ON
 static   uint32_t g_nfc_last_report_ms = 0; // for UART throttle
-float accelData[4], gyroData[4];
+
+// Running flag
+volatile bool programRunning = true;
 
 static void UART1_Init(void) {
 	/* Pin configuration for UART. BSP_COM_Init() can do
@@ -248,22 +251,11 @@ static void MX_GPIO_Init(void) {
 	//__HAL_GPIO_EXTI_CLEAR_IT(BUTTON_EXTI13_Pin);
 	//__HAL_GPIO_EXTI_CLEAR_IT(ST25DV04K_GPO_Pin);
 	// Enable NVIC EXTI line 0 - 15
-	HAL_NVIC_SetPriority(BUTTON_EXTI13_EXTI_IRQn, 2, 0);
-	HAL_NVIC_EnableIRQ(BUTTON_EXTI13_EXTI_IRQn);
+	HAL_NVIC_SetPriority(EXTI15_10_IRQn, 2, 0);
+	HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 	HAL_NVIC_SetPriority(EXTI4_IRQn, 1, 0);
 	HAL_NVIC_EnableIRQ(EXTI4_IRQn);
-
-	// GPO Interrupt
-//	ST25DV_ITStatus_Dyn it;
-//	ST25DV_GPOConfig cfg = {0};
-//	cfg.RFUserDetect = 1;      // or RFFieldChange / MailboxMsg, depending on your header
-//	ST25DV_WriteGPOConfig(&NfcTagObj, &cfg);
 }
-
-void EXTI4_IRQHandler(void) {
-    HAL_GPIO_EXTI_IRQHandler(ST25DV04K_GPO_Pin);
-}
-
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == ST25DV04K_GPO_Pin) {
@@ -282,7 +274,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 
 
 	if(GPIO_Pin == BUTTON_EXTI13_Pin) {
-	    HAL_UART_Transmit(&huart1, (uint8_t*)"Blue button is pressed\r\n", sizeof("Blue button is pressed\r\n") - 1, 100);
+	    // HAL_UART_Transmit(&huart1, (uint8_t*)"Blue button is pressed\r\n", sizeof("Blue button is pressed\r\n") - 1, 100);
 
 		if (buttonActive == false) {
 			buttonActive = true;
@@ -297,14 +289,15 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 
 		if (nearbyFlag) {
 			if (isPlayer) {
-			    HAL_UART_Transmit(&huart1, (uint8_t*)"Player escaped, good job!\r\n", sizeof("Player escaped, good job!\r\n") - 1, 100);
+			    HAL_UART_Transmit(&huart1, (uint8_t*)"Player escaped, good job! \r\n", sizeof("Player escaped, good job!\r\n") - 1, 100);
 			} else {
-			    HAL_UART_Transmit(&huart1, (uint8_t*)"Player captured, good job!\r\n", sizeof("Player captured, good job!\r\n") - 1, 100);
+			    HAL_UART_Transmit(&huart1, (uint8_t*)"Player captured, good job! \r\n", sizeof("Player captured, good job!\r\n") - 1, 100);
 			}
 			nearbyFlag = false;
 		}
 	}
 }
+
 
 static void I2C_Scan(I2C_HandleTypeDef *hi2c, const char *tag) {
   char m[64];
@@ -372,7 +365,7 @@ float AccelerometerHelper(float* buffer) {
 	buffer[3] = sqrtf(buffer[0]*buffer[0] + buffer[1]*buffer[1] + buffer[2]*buffer[2]);
 
 	char message_print[64];
-	sprintf(message_print, "Accel: X: %.2f m/s², Y: %.2f m/s², Z: %.2f m/s², aggregated= %.2f m/s²\r\n", buffer[0], buffer[1], buffer[2], buffer[3]);
+	sprintf(message_print, "Accel: X: %.2f m/s^2, Y: %.2f m/s^2, Z: %.2f m/s^2, aggregated= %.2f m/s^2 \r\n", buffer[0], buffer[1], buffer[2], buffer[3]);
 	HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
 
 	return buffer[3];
@@ -440,8 +433,7 @@ float MagnetometerHelper(float* buffer) {
 }
 
 void EnforcerOutput(void) {
-    HAL_UART_Transmit(&huart1, (uint8_t*)"Player Out!\r\n", sizeof("Player Out!\r\n") - 1, 100);
-
+    HAL_UART_Transmit(&huart1, (uint8_t*)"Player Out! \r\n", sizeof("Player Out! \r\n") - 1, 100);
 }
 
 void LEDBlinkHelper(int modulo) {
@@ -556,38 +548,21 @@ static const uint8_t font5x7[][5] = {
     {0x63,0x14,0x08,0x14,0x63}, // 'X'
     {0x07,0x08,0x70,0x08,0x07}, // 'Y'
     {0x61,0x51,0x49,0x45,0x43}, // 'Z'
-    // '-' '.' ':' '^' '/'
-	{0x08,0x08,0x08,0x08,0x08}, // '-'
-	{0x00,0x60,0x60,0x00,0x00}, // '.'
-	{0x00,0x36,0x36,0x00,0x00}, // ':'
-	{0x04,0x02,0x01,0x02,0x04}, // '^'
-	{0x20,0x10,0x08,0x04,0x02}, // '/'
-	{0x06,0x09,0x09,0x06,0x00}, // '°'
-	{0x61,0x12,0x08,0x24,0x43}, // '%'
-	{0x24,0x52,0x4A,0x24,0x50}, // '&'
-
+    // '-' '.' ':'
+    {0x08,0x08,0x08,0x08,0x08}, // '-'
+    {0x00,0x60,0x60,0x00,0x00}, // '.'
+    {0x00,0x36,0x36,0x00,0x00}, // ':'
 };
-
 static inline const uint8_t* glyph_for(char c) {
     if (c == ' ') return font5x7[0];
     if (c >= '0' && c <= '9') return font5x7[1 + (c - '0')];
     if (c >= 'A' && c <= 'Z') return font5x7[11 + (c - 'A')];
-
-    int puncBase = 11 + 26;  // index of '-'
-
-    if (c == '-') return font5x7[puncBase + 0];
-    if (c == '.') return font5x7[puncBase + 1];
-    if (c == ':') return font5x7[puncBase + 2];
-    if (c == '^') return font5x7[puncBase + 3];
-    if (c == '/') return font5x7[puncBase + 4];
-    if ((unsigned char)c == 0xB0) return font5x7[puncBase + 5]; // '°'
-    if (c == '%') return font5x7[puncBase + 6];
-    if (c == '&') return font5x7[puncBase + 7];
-
+    if (c == '-') return font5x7[11 + 26];
+    if (c == '.') return font5x7[11 + 27];
+    if (c == ':') return font5x7[11 + 28];
     // Fallback: blank
     return font5x7[0];
 }
-
 static void fb_set_pixel(int x, int y, int on) {
     if (x < 0 || x >= SSD1308_WIDTH || y < 0 || y >= SSD1308_HEIGHT) return;
     int page = y >> 3;
@@ -647,90 +622,13 @@ static HAL_StatusTypeDef oled_flush_full(void) {
     }
     return HAL_OK;
 }
-
-// Game 1: Red Light / Green Light
-static void OLED_Show_RLGL(bool isGreen, bool isPlayer, float accelMag, float gyroMag) {
-	char line[32];
-
-	fb_clear();
-    // ----- Header (centered) -----
-	fb_draw_text(0,  0, "--------------------"); // top line
-    fb_draw_text(16, 8, "GAME 1 : RLGL");        // title
-    fb_draw_text(0,  16, "--------------------"); // bottom line
-    // ----- Role & Phase -----
-    sprintf(line, "ROLE : %s", isPlayer ? "PLAYER" : "ENFORCER");
-    fb_draw_text(0, 24, line);
-
-    sprintf(line, "PHASE: %s", isGreen ? "GREEN" : "RED");
-    fb_draw_text(0, 32, line);
-
-    if (isGreen) {
-		// ----- Show environment in GREEN phase -----
-		sprintf(line, "TEM : %4.1f \xB0""C", TemperatureSensorHelper(true));
-		fb_draw_text(0, 40, line);
-
-        sprintf(line, "HUM : %4.1f %%", HumiditySensorHelper(true));
-        fb_draw_text(0, 48, line);
-
-		sprintf(line, "PRE : %5.1f HPA", PressureSensorHelper(true));
-		fb_draw_text(0, 56, line);
-
-
-    } else {
-        // ----- Show motion in RED phase -----
-        sprintf(line, "ACC  : %4.1f M/S^2", accelMag);
-        fb_draw_text(0, 40, line);
-
-        sprintf(line, "GYRO : %4.1f DEG/SEC", gyroMag);
-        fb_draw_text(0, 48, line);
-    }
-
-    oled_flush_full();
-}
-
-// Game 2: Catch & Run
-static void OLED_Show_CatchRun(bool isPlayer, float magField) {
-	char line[32];
-
-	fb_clear();
-
-    // thresholds (adjust as needed)
-    const float MAG_VERY_NEAR = 600.0f;
-    const float MAG_NEAR      = 400.0f;
-
-    // ----- Header -----
-    fb_draw_text(0,  0, "---------------------");
-    fb_draw_text(6,  8, "GAME 2 : CATCH & RUN");
-    fb_draw_text(0, 16, "---------------------");
-
-    // ----- Role -----
-    sprintf(line, "ROLE : %s", isPlayer ? "PLAYER" : "ENFORCER");
-    fb_draw_text(0, 24, line);
-
-    // ----- Proximity status -----
-    const char *status;
-    if (magField > MAG_VERY_NEAR) {
-        status = "VERY NEAR";
-    } else if (magField > MAG_NEAR) {
-        status = "NEAR";
-    } else {
-        status = "FAR";
-    }
-
-    sprintf(line, "STATUS: %s", status);
-    fb_draw_text(0, 32, line);
-
-    // ----- Magnetometer magnitude -----
-    sprintf(line, "MAG: %4.1f T", magField);
-    fb_draw_text(0, 40, line);
-
-    // ----- Environment (2 lines) -----
-    sprintf(line, "TEM: %4.1f\xB0""C HUM: %3.0f%%", TemperatureSensorHelper(true), HumiditySensorHelper(true));
-    fb_draw_text(0, 48, line);
-
-    sprintf(line, "PRE: %5.1f hPa", PressureSensorHelper(true));
-    fb_draw_text(0, 56, line);
-
+void demo_text() {
+    fb_clear();
+    fb_draw_text(0, 0, "HELLO WORLD");
+    fb_draw_text(0, 8, "T E S T TEST TTT");
+    fb_draw_text(0, 16, "1.2:3.4:5.6:7.8:9");
+    fb_draw_text(0, 24, "SUCK MY BALLS");
+    fb_draw_text(0, 32, "JIA DE");
     oled_flush_full();
 }
 
@@ -781,9 +679,16 @@ static inline HAL_StatusTypeDef HT16K33_WriteRows8(const uint8_t rows[8])
     return HAL_I2C_Master_Transmit(&hi2c1, HT16K33_ADDR, buf, sizeof(buf), HAL_MAX_DELAY);
 }
 
+static inline uint32_t nfc_take_events(void) {
+    uint32_t it = g_nfc_it_flags;   // snapshot
+    g_nfc_it_flags = 0;             // consume
+    return it;
+}
 
-
-
+// Returns current RF field level (1 = present, 0 = not present)
+static inline bool nfc_is_present(void) {
+    return g_nfc_rf_state != 0;
+}
 
 // Custom Class for Switching
 typedef struct {
@@ -793,6 +698,12 @@ typedef struct {
 	void (*exit)(void);
 } State;
 
+void Start_initialise();
+void Start_update();
+void Start_exit();
+void End_initialise();
+void End_update();
+void End_exit();
 void RedLightGreenLight_initialise(void);
 void RedLightGreenLight_update(void);
 void RedLightGreenLight_exit(void);
@@ -800,25 +711,58 @@ void CatchAndRun_initialise(void);
 void CatchAndRun_update(void);
 void CatchAndRun_exit(void);
 
-// Implementation for RedLightGreenLight State
+void Start_initialise() {
+    HAL_UART_Transmit(&huart1, (uint8_t*)"Welcome to the START\r\n", sizeof("Welcome to the START\r\n") - 1, 100);
+}
+void Start_update() {
+	// Consume new NFC edges (if any)
+	uint32_t ev = nfc_take_events();
+
+	// Transition out of Start when a phone is detected:
+	//  - on rising edge (preferred), OR
+	//  - if already present when booted (level)
+	if ((ev & NFCTAG_IT_FIELDRISING) || nfc_is_present()) {
+		HAL_UART_Transmit(&huart1,
+						  (uint8_t*)"NFC detected - starting game\r\n",
+						  sizeof("NFC detected - starting game\r\n") - 1, 100);
+		toggleState();
+	}
+}
+void Start_exit() {
+    HAL_UART_Transmit(&huart1, (uint8_t*)"--- State Exiting: START ---\r\n", sizeof("--- State Exiting: START ---\r\n") - 1, 100);
+}
+void End_initialise() {
+	HAL_UART_Transmit(&huart1, (uint8_t*)"Game Over\r\n", sizeof("Game Over\r\n") - 1, 100);
+	programRunning = false;
+}
+void End_update() {
+	while(1) {
+		continue;
+	}
+}
+void End_exit() {
+	HAL_UART_Transmit(&huart1, (uint8_t*)"Game Over\r\n", sizeof("Game Over\r\n") - 1, 100);
+}
 void RedLightGreenLight_initialise(void) {
 	if (isPlayer) {
-		char message[] = "Entering Red Light, Green Light as Player\r\n"; // Fixed message
-
-		char message_print[64];
-		sprintf(message_print, "%s", message);
-		HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
-
+	    HAL_UART_Transmit(&huart1, (uint8_t*)"Entering Red Light, Green Light as Player\r\n",
+	    		sizeof("Entering Red Light, Green Light as Player\r\n") - 1, 100);
 	} else {
-		char message[] = "Entering Red Light, Green Light as Enforcer\r\n"; // Fixed message
-
-		char message_print[64];
-		sprintf(message_print, "%s", message);
-		HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+	    HAL_UART_Transmit(&huart1, (uint8_t*)"Entering Red Light, Green Light as Enforcer\r\n",
+	    		sizeof("Entering Red Light, Green Light as Enforcer\r\n") - 1, 100);
 	}
 }
 void RedLightGreenLight_update(void) {
+    static bool init = false;
 	static bool isGreen = false;
+	uint32_t now = HAL_GetTick();
+	static uint32_t next_ms;
+	static int countdown = 9;        // start at 9
+
+	if (!init) {
+		init = true;
+		next_ms = now + 1000U;    // start 1s from now
+	}
 
 	// timing shit
 	static uint32_t lastToggle = 0;
@@ -832,24 +776,25 @@ void RedLightGreenLight_update(void) {
 	if (HAL_GetTick() - lastToggle >= 10000) {
         lastToggle = HAL_GetTick();
 
-		char message_print[32]; // UART	transmit buffer.
 		if (!isGreen) { // if isGreen =/= true, at the start is false -> true
-			char message[] = "Green Light!\r\n";
-			sprintf(message_print, "%s", message);
-			isGreen = true;
+			HAL_UART_Transmit(&huart1, (uint8_t*)"Green Light! \r\n", sizeof("Green Light! \r\n") - 1, 100);
 
+			isGreen = true;
 			lastCaptured = false;
 		} else {
-			char message[] = "Red Light!\r\n";
-			sprintf(message_print, "%s", message);
+			HAL_UART_Transmit(&huart1, (uint8_t*)"Red Light! \r\n", sizeof("Red Light! \r\n") - 1, 100);
+
 			isGreen = false;
 		}
-
-		HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
 	}
 
-
 	if (isGreen) {
+		if ((int32_t)(HAL_GetTick() - next_ms) >= 0) {   // time reached (handles wrap)
+			next_ms += 1000U;
+			HT16K33_WriteRows8(led_matrix_frame(countdown, LED_SHAPE_GREEN));
+			countdown = (countdown == 0) ? 9 : (countdown - 1);
+		}
+
 		HAL_GPIO_WritePin(ARD_D13_GPIO_Port, ARD_D13_Pin, GPIO_PIN_SET);
 		HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, GPIO_PIN_SET);
 		lastCaptured = false;
@@ -858,11 +803,14 @@ void RedLightGreenLight_update(void) {
 			TemperatureSensorHelper(true);
 			PressureSensorHelper(true);
 			HumiditySensorHelper(true);
-
-			 // Show simple RLGL screen (no movement yet)
-			OLED_Show_RLGL(true, isPlayer,0.0f, 0.0f);
 		}
 	} else {
+		if ((int32_t)(HAL_GetTick() - next_ms) >= 0) {
+			next_ms += 1000U;
+			HT16K33_WriteRows8(led_matrix_frame(countdown, LED_SHAPE_RED));
+			countdown = (countdown == 0) ? 9 : (countdown - 1);
+		}
+
 		if (!lastCaptured) {
 			AccelerometerHelper(lastAccel);
 			GyroscopeHelper(lastGyro);
@@ -876,21 +824,13 @@ void RedLightGreenLight_update(void) {
 		    lastLEDToggle = HAL_GetTick();
 		}
 
-
-		// Red Light
-
-
 		if (HAL_GetTick() % 2000 < 10) {
 			float accelThreshold = 0.8f; // m/s², mild movement
 			float gyroThreshold  = 1.5f; // deg/s, mild rotation -> this sensor noise is way too high
 
-
+			float accelData[4], gyroData[4];
 			AccelerometerHelper(accelData);
 			GyroscopeHelper(gyroData);
-
-			// NEW: update OLED with magnitudes (index 3)
-			OLED_Show_RLGL(false, isPlayer,accelData[3], gyroData[3]);
-
 
 			for (int i = 0; i<4; i++) {
 				lastGyro[i] = gyroData[i];
@@ -898,7 +838,7 @@ void RedLightGreenLight_update(void) {
 			}
 
 			if (isPlayer && (fabs(accelData[3] - lastAccel[3]) > accelThreshold) && (fabs(gyroData[3]  - lastGyro[3]) > gyroThreshold)) {
-				endState();
+				switchEndState();
 				return;
 			} else if (!isPlayer && (fabs(accelData[3] - lastAccel[3]) > accelThreshold) && (fabs(gyroData[3]  - lastGyro[3]) > gyroThreshold)) {
 				EnforcerOutput();
@@ -908,10 +848,8 @@ void RedLightGreenLight_update(void) {
 }
 
 void RedLightGreenLight_exit(void) {
-    char message[] = "--- State Exiting: RedLightGreenLight ---\r\n"; // Fixed message
-	char message_print[64];
-	sprintf(message_print, "%s", message);
-	HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+	HAL_UART_Transmit(&huart1, (uint8_t*)"--- State Exiting: RedLightGreenLight ---\r\n",
+		    		sizeof("--- State Exiting: RedLightGreenLight ---\r\n") - 1, 100);
 }
 
 // Implementation for CatchAndRun State
@@ -932,9 +870,9 @@ void CatchAndRun_initialise(void) {
 void CatchAndRun_update(void) {
 	if (HAL_GetTick() % 1000 < 10) {
 		// Tested in dorm room
-//		Temp = 33.67 deg C
-//		Pressure = 1008.35
-//		Humidity = 63.11
+		// Temp = 33.67 deg C
+		// Pressure = 1008.35
+		// Humidity = 63.11
 
 		float tempThreshold = 35.0f; // m/s², mild movement
 		float pressureThreshold  = 1030.0f;
@@ -966,9 +904,6 @@ void CatchAndRun_update(void) {
 	MagnetometerHelper(magnetData); // constant continuous
 	float magnetoThreshold = 400.0f;
 
-	// NEW: show Catch & Run info every loop
-	OLED_Show_CatchRun(isPlayer, magnetData[3]);
-
 	if (isPlayer && magnetData[3] > magnetoThreshold) {
 		if (nearbyFlag == false) {
 			nearbyStartTime = HAL_GetTick();
@@ -976,31 +911,25 @@ void CatchAndRun_update(void) {
 		}
 
 		if (HAL_GetTick() % 500 < 10) {
-			char magnetoMessage[80];
-			sprintf(magnetoMessage, "Enforcer nearby! Be careful.\r\n");
-			HAL_UART_Transmit(&huart1, (uint8_t*)magnetoMessage, strlen(magnetoMessage), 0xFFFF);
+			HAL_UART_Transmit(&huart1, (uint8_t*)"Enforcer nearby! Be careful.\r\n", sizeof("Enforcer nearby! Be careful.\r\n") - 1, 100);
 		}
 
-	} else if (!isPlayer && magnetData[3] > magnetoThreshold){
+	} else if (!isPlayer && magnetData[3] > magnetoThreshold) {
 		if (nearbyFlag == false) {
 			nearbyStartTime = HAL_GetTick();
 			nearbyFlag = true;
 		}
 
 		if (HAL_GetTick() % 500 < 10) {
-			char magnetoMessage[80];
-			sprintf(magnetoMessage, "Player is Nearby! Move faster.\r\n");
-			HAL_UART_Transmit(&huart1, (uint8_t*)magnetoMessage, strlen(magnetoMessage), 0xFFFF);
+			HAL_UART_Transmit(&huart1, (uint8_t*)"Player is Nearby! Move faster.\r\n", sizeof("Player is Nearby! Move faster.\r\n") - 1, 100);
 		}
 	}
 
 	if (HAL_GetTick() - nearbyStartTime > 3000 && isPlayer && nearbyFlag) {
-		endState();
+		switchEndState();
 	} else if (HAL_GetTick() - nearbyStartTime > 3000 && !isPlayer && nearbyFlag) {
 		nearbyFlag = false;
-		char chaseMessage[64];
-		sprintf(chaseMessage, "Player escaped! Keep trying.\r\n");
-		HAL_UART_Transmit(&huart1, (uint8_t*)chaseMessage, strlen(chaseMessage), 0xFFFF);
+		HAL_UART_Transmit(&huart1, (uint8_t*)"Player escaped! Keep trying.\r\n", sizeof("Player escaped! Keep trying.\r\n") - 1, 100);
 	}
 
 	// LED Blinking
@@ -1013,22 +942,29 @@ void CatchAndRun_update(void) {
 	}
 }
 void CatchAndRun_exit(void) {
-    char message[] = "--- State Exiting: CatchAndRun ---\r\n"; // Fixed message
-	char message_print[64];
-	sprintf(message_print, "%s", message);
-	HAL_UART_Transmit(&huart1,(uint8_t*)message_print, strlen(message_print),0xFFFF);
+	HAL_UART_Transmit(&huart1, (uint8_t*)"--- State Exiting: CatchAndRun ---\r\n", sizeof("--- State Exiting: CatchAndRun ---\r\n") - 1, 100);
 }
 
 // State variable
-State* currentState;         // Pointer
-// Define the two states
+State* currentState; // Pointer
+State StartState = {
+    .name = "Start",
+    .initialise = Start_initialise,
+    .update = Start_update,
+    .exit = Start_exit
+};
+State EndState = {
+    .name = "End",
+    .initialise = End_initialise,
+    .update = End_update,
+    .exit = End_exit
+};
 State RedLightGreenLightState = {
     .name = "RedLightGreenLight",
     .initialise = RedLightGreenLight_initialise,
     .update = RedLightGreenLight_update,
     .exit = RedLightGreenLight_exit
 };
-
 State CatchAndRunState = {
     .name = "CatchAndRun",
     .initialise = CatchAndRun_initialise,
@@ -1036,11 +972,11 @@ State CatchAndRunState = {
     .exit = CatchAndRun_exit
 };
 
-// Running flag
-volatile bool programRunning = true;
-
 void toggleState(void) {
-	if (currentState == &RedLightGreenLightState) {
+	if (currentState == &StartState) {
+		currentState->exit();
+		currentState = &RedLightGreenLightState;
+	} else if (currentState == &RedLightGreenLightState) {
 		currentState->exit();
 		currentState = &CatchAndRunState;
 	} else if (currentState == &CatchAndRunState) {
@@ -1051,9 +987,10 @@ void toggleState(void) {
 	currentState->initialise();
 }
 
-void endState(void) {
-	HAL_UART_Transmit(&huart1, (uint8_t*)"Game Over\r\n", sizeof("Game Over\r\n") - 1, 100);
-	programRunning = false;
+void switchEndState(void) {
+	currentState->exit();
+	currentState = &EndState;
+	currentState->initialise();
 }
 
 
@@ -1097,46 +1034,31 @@ void setup(void) {
 	uint16_t dummy; (void)BSP_NFCTAG_GetITStatus(0, &dummy);
 	uint8_t  dyn;   (void)BSP_NFCTAG_ReadITSTStatus_Dyn(0, &dyn);
 
-
 	OLED_ON(); // on screen
-	oled_clear();           // blank screen at start
-	// Show initial Game 1 screen:
-	OLED_Show_RLGL(false, isPlayer,0.0f, 0.0f);
+	oled_clear();
+	demo_text();
 
 	// LED MATRIX
 	HT16K33_Init(15, 0);
-	uint8_t frame[8] = {
-	        0b00000000,
-	        0b00000010,
-	        0b00000100,
-	        0b00001000,
-	        0b00010000,
-	        0b00100000,
-	        0b01000000,
-	        0b10000000,
-	};
-	HT16K33_WriteRows8(frame); // LED MATRIX
+	HT16K33_WriteRows8(led_matrix_frame(-1, LED_SHAPE_NONE)); // clear the LED Matrix
 
 	// SENSOR_IO_Write(0xD4, 0x0D, 0x03); // gyro
 
 	// My state machine
-	currentState = &RedLightGreenLightState;
+	currentState = &StartState;
 	currentState->initialise();
 }
 
 
-
-static void nfc_service(void)
-{
-    uint32_t it = g_nfc_it_flags;
+static void nfc_service(void) {
+    uint32_t it = nfc_take_events(); // read & clear once
     if (!it) return;
-    g_nfc_it_flags = 0;
 
     if (it & NFCTAG_IT_FIELDRISING) {
         uint32_t now = HAL_GetTick();
-        if (now - g_nfc_last_report_ms >= 1000) { // 1 s rate-limit
-            const char *msg = "RF field ON (phone near)\r\n";
-            HAL_UART_Transmit(&huart1, (uint8_t*)msg, (uint16_t)strlen(msg), 100);
+        if (now - g_nfc_last_report_ms >= 1000U) {
+//            const char *msg = "RF field ON (phone near)\r\n";
+//            HAL_UART_Transmit(&huart1, (uint8_t*)msg, (uint16_t)strlen(msg), 100);
             g_nfc_last_report_ms = now;
         }
     }
