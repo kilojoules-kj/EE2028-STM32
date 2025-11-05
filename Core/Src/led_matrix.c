@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-typedef uint8_t LedFrame[8];
+// typedef uint8_t LedFrame[8];
 
 static const LedFrame DIGIT_0_RIGHT = {
     0b00001111,
@@ -132,13 +132,55 @@ static const LedFrame RED_LIGHT = {
 	0b10100000,
 	0b00000000, };
 
+static const LedFrame LETTER_PLAYER_CENTER = {
+    0b00000000,
+    0b00111100,
+    0b01000100,
+    0b01000100,
+    0b01111000,
+    0b01000000,
+    0b01000000,
+    0b00000000,
+};
+
+static const LedFrame LETTER_ENFORCER_CENTER = {
+    0b00000000,
+    0b00111100,
+    0b01000000,
+    0b01001100,
+    0b01110000,
+    0b01000000,
+    0b00111100,
+    0b00000000,
+};
+
+static const LedFrame LETTER_TICK_CENTER = {
+    0b00000000,
+    0b00000001,
+    0b00000010,
+    0b10000100,
+    0b01001000,
+    0b00110000,
+    0b00000000,
+    0b00000000,
+};
+
+static const LedFrame LETTER_CROSS_CENTER = {
+    0b00000000,
+    0b10000001,
+    0b01000010,
+    0b00100100,
+    0b00011000,
+    0b00100100,
+    0b01000010,
+    0b10000001,
+};
+
 // Map digits to the right-side glyphs (just pointers to your existing const tables)
 static const LedFrame *const DIGITS[10] = {
     &DIGIT_0_RIGHT, &DIGIT_1_RIGHT, &DIGIT_2_RIGHT, &DIGIT_3_RIGHT, &DIGIT_4_RIGHT,
     &DIGIT_5_RIGHT, &DIGIT_6_RIGHT, &DIGIT_7_RIGHT, &DIGIT_8_RIGHT, &DIGIT_9_RIGHT
 };
-
-
 
 // tiny helpers (kept local so you don’t need a header)
 static inline int clamp_digit(int d) { return (d < 0) ? 0 : (d > 9 ? 9 : d); }
@@ -147,6 +189,23 @@ static inline void copy_frame(LedFrame dst, const LedFrame src) {
 }
 static inline void or_frame(LedFrame dst, const LedFrame mask) {
     for (int i = 0; i < 8; ++i) dst[i] |= mask[i];
+}
+
+const uint8_t *led_matrix_role_badge(bool isPlayer)
+{
+    // LETTER_*_CENTER are already defined above as static const LedFrame
+    return isPlayer ? (const uint8_t*)LETTER_PLAYER_CENTER
+                    : (const uint8_t*)LETTER_ENFORCER_CENTER;
+}
+
+const uint8_t *led_matrix_status_escaped(void)
+{
+    return (const uint8_t*)LETTER_TICK_CENTER;
+}
+
+const uint8_t *led_matrix_status_captured(void)
+{
+    return (const uint8_t*)LETTER_CROSS_CENTER;
 }
 
 /*

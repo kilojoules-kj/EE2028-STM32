@@ -74,6 +74,9 @@ static bool isPlayer = false;
 static bool nearbyFlag = false;
 static uint32_t nearbyStartTime;
 
+// LED matrix badge flash window
+static uint32_t g_led_badge_until = 0;
+
 static uint32_t g_boot_ignore_until = 0;
 volatile uint32_t g_nfc_it_flags = 0;
 volatile uint32_t g_nfc_last_irq_ms = 0;
@@ -88,6 +91,7 @@ volatile bool programRunning = true; // Running flag
 float accelData[4], gyroData[4];
 
 static inline void Banner_PostFromISR(const char *s, uint32_t now, uint32_t duration_ms);
+static inline HAL_StatusTypeDef HT16K33_WriteRows8(const uint8_t rows[8]);
 static inline void TIM_StartOneShot_ms(TIM_HandleTypeDef *htim, uint32_t ms);
 static inline void TIM_Stop(TIM_HandleTypeDef *htim);
 
@@ -365,12 +369,16 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 								  sizeof("Player escaped, good job!\r\n") - 1, 100);
 				Banner_PostFromISR("!!!PLAYER ESCAPED!!!", now, 2000U); // show for 2s
 		        Buzzer_PlayPattern(BUZZ_ESCAPED, now);
+		        HT16K33_WriteRows8(led_matrix_status_escaped());  // ✔
+				g_led_badge_until = now + 1000U;
 			} else {
 				// Enforcer pressed while near -> captured
 				HAL_UART_Transmit(&huart1, (uint8_t*)"Player captured, good job!\r\n",
 								  sizeof("Player captured, good job!\r\n") - 1, 100);
 				Banner_PostFromISR("!!!PLAYER CAPTURED!!!", now, 2000U); // show for 2s
 		        Buzzer_PlayPattern(BUZZ_ESCAPED, now);
+		        HT16K33_WriteRows8(led_matrix_status_escaped());  // ✔
+				g_led_badge_until = now + 1000U;
 			}
 			nearbyFlag = false;
 		}
@@ -426,6 +434,7 @@ void ToggleRole_isPlayer(void) {
         HAL_UART_Transmit(&huart1,(uint8_t*)"Role: PLAYER\r\n",14,100);
     else
         HAL_UART_Transmit(&huart1,(uint8_t*)"Role: ENFORCER\r\n",16,100);
+    HT16K33_WriteRows8(led_matrix_role_badge(isPlayer));
 }
 
 static inline void Banner_PostFromISR(const char *s, uint32_t now, uint32_t duration_ms)
@@ -435,6 +444,11 @@ static inline void Banner_PostFromISR(const char *s, uint32_t now, uint32_t dura
     for (; s[i] && i < sizeof(g_banner)-1; ++i) g_banner[i] = s[i];
     g_banner[i] = '\0';
     g_banner_until_ms = now + duration_ms;
+}
+
+// Helper to show current role badge
+static inline void LED_ShowRole(void) {
+    HT16K33_WriteRows8(led_matrix_role_badge(isPlayer));
 }
 
 // Helper Methods
@@ -1205,6 +1219,7 @@ void RedLightGreenLight_exit(void) {
 
 // Implementation for CatchAndRun State
 void CatchAndRun_initialise(void) {
+	LED_ShowRole();
 	Buzzer_PlayPattern(BUZZ_CHANGE_GAME, HAL_GetTick());
     if (isPlayer) {
     	HAL_UART_Transmit(&huart1, (uint8_t*)"--- Entering Catch And Run as Player ---\r\n",
@@ -1218,6 +1233,11 @@ void CatchAndRun_initialise(void) {
 }
 void CatchAndRun_update(void) {
     uint32_t now = HAL_GetTick();
+    // flashing a tick/cross, revert to role when time elapses
+    if (g_led_badge_until && (int32_t)(now - g_led_badge_until) >= 0) {
+        g_led_badge_until = 0;
+        LED_ShowRole();
+    }
 
     // ---------- one-time init of anchors ----------
     static bool     init       = false;
@@ -1281,7 +1301,6 @@ void CatchAndRun_update(void) {
     }
 
     // ---------- proximity logic + 500ms messages ----------
-    char banner[32] = "";
     if (isPlayer && mag > magnetoThreshold) {
         if (!nearbyFlag) { nearbyFlag = true; nearbyStartTime = now; }
         if ((int32_t)(now - t_near_msg) >= 0) {
@@ -1289,7 +1308,7 @@ void CatchAndRun_update(void) {
                               sizeof("Enforcer nearby! Be careful.\r\n") - 1, 100);
             t_near_msg += 500U;
         }
-        strcpy(banner, "!ENFORCER NEARBY!");
+        Banner_PostFromISR("!ENFORCER NEARBY!", now, 600U);
 
     } else if (!isPlayer && mag > magnetoThreshold) {
         if (!nearbyFlag) { nearbyFlag = true; nearbyStartTime = now; }
@@ -1298,7 +1317,7 @@ void CatchAndRun_update(void) {
                               sizeof("Player is Nearby! Move faster.\r\n") - 1, 100);
             t_near_msg += 500U;
         }
-        strcpy(banner, "!PLAYER NEARBY!");
+        Banner_PostFromISR("!PLAYER NEARBY!", now, 600U);
 
     } else {
         // out of range: clear flag so the 3s timer resets on next entry
@@ -1308,6 +1327,7 @@ void CatchAndRun_update(void) {
     // ---------- 3s proximity consequence ----------
     if (nearbyFlag && (now - nearbyStartTime) > 3000U) {
         if (isPlayer) {
+            HT16K33_WriteRows8(led_matrix_status_captured()); // ✖ (bad for player)
         	OLED_Show_CatchRun(isPlayer, mag, "!!!!GAME OVER!!!!");
             Buzzer_PlayPattern(BUZZ_GAME_OVER, now);        // <--- add
             switchEndState();
@@ -1317,7 +1337,8 @@ void CatchAndRun_update(void) {
             HAL_UART_Transmit(&huart1, (uint8_t*)"Player escaped! Keep trying.\r\n",
                               sizeof("Player escaped! Keep trying.\r\n") - 1, 100);
             nearbyFlag = false; // optional reset for next cycle
-
+            HT16K33_WriteRows8(led_matrix_status_captured()); // ✖ (bad for enforcer)
+            g_led_badge_until = now + 1200U; // revert to 'E'
         }
     }
 
